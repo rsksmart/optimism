@@ -276,6 +276,99 @@ func checkPredeployConfig(client *ethclient.Client, name string) error {
 			if err := checkEAS(p, client); err != nil {
 				return fmt.Errorf("EAS: %w", err)
 			}
+
+		case predeploys.Create2DeployerAddr:
+			bytecode, err := bindings.GetDeployedBytecode("Create2Deployer")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "Create2Deployer", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.MultiCall3Addr:
+			bytecode, err := bindings.GetDeployedBytecode("MultiCall3")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "MultiCall3", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.Safe_v130Addr:
+			bytecode, err := bindings.GetDeployedBytecode("Safe_v130")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "Safe_v130", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.SafeL2_v130Addr:
+			bytecode, err := bindings.GetDeployedBytecode("SafeL2_v130")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "SafeL2_v130", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.MultiSendCallOnly_v130Addr:
+			bytecode, err := bindings.GetDeployedBytecode("MultiSendCallOnly_v130")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "MultiSendCallOnly_v130", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.SafeSingletonFactoryAddr:
+			bytecode, err := bindings.GetDeployedBytecode("SafeSingletonFactory")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "SafeSingletonFactory", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.DeterministicDeploymentProxyAddr:
+			bytecode, err := bindings.GetDeployedBytecode("DeterministicDeploymentProxy")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "DeterministicDeploymentProxy", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.MultiSend_v130Addr:
+			bytecode, err := bindings.GetDeployedBytecode("MultiSend_v130")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "MultiSend_v130", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.Permit2Addr:
+			log.Warn("Skipping deployed bytecode check for Permit2 since it contains an immutable Solidity variable")
+
+		case predeploys.SenderCreatorAddr:
+			bytecode, err := bindings.GetDeployedBytecode("SenderCreator")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "SenderCreator", client, bytecode); err != nil {
+				return err
+			}
+
+		case predeploys.EntryPointAddr:
+			bytecode, err := bindings.GetDeployedBytecode("EntryPoint")
+			if err != nil {
+				return err
+			}
+			if err := checkPredeployBytecode(p, "EntryPoint", client, bytecode); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -844,6 +937,17 @@ func checkEAS(addr common.Address, client *ethclient.Client) error {
 		return err
 	}
 	log.Info("EAS version", "version", version)
+	return nil
+}
+
+func checkPredeployBytecode(addr common.Address, name string, client *ethclient.Client, expectedBytecode []byte) error {
+	code, err := client.CodeAt(context.Background(), addr, nil)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(code, expectedBytecode) {
+		return fmt.Errorf("deployed bytecode at %s, doesn't match expected for %s", addr, name)
+	}
 	return nil
 }
 
