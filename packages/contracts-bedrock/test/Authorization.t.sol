@@ -112,7 +112,7 @@ contract Authorization_Test is CommonTest {
         });
         _addSpec({
             _name: "L1CrossDomainMessenger",
-            _sel: _getSel("initialize(address)"),
+            _sel: _getSel("initialize(address,address)"),
             _auth: false,
             _pausable: false
         });
