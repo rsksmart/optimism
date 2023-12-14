@@ -248,7 +248,7 @@ contract Authorization_Test is CommonTest {
             _auth: true,
             _pausable: true
         });
-        _addSpec({ _name: "L1StandardBridge", _sel: _getSel("initialize(address)"), _auth: false, _pausable: false });
+        _addSpec({ _name: "L1StandardBridge", _sel: _getSel("initialize(address,address,address)"), _auth: false, _pausable: false });
         _addSpec({ _name: "L1StandardBridge", _sel: _getSel("l2TokenBridge()"), _auth: false, _pausable: false });
         _addSpec({ _name: "L1StandardBridge", _sel: _getSel("messenger()"), _auth: false, _pausable: false });
         _addSpec({ _name: "L1StandardBridge", _sel: _getSel("otherBridge()"), _auth: false, _pausable: false });
