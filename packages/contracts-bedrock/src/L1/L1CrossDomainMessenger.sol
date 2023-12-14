@@ -20,10 +20,9 @@ contract L1CrossDomainMessenger is CrossDomainMessenger, ISemver {
     /// @notice Address of the SuperchainConfig contract.
     SuperchainConfig public superchainConfig;
 
-    // TODO: should semver version be updated?
     /// @notice Semantic version.
-    /// @custom:semver 2.1.1
-    string public constant version = "2.1.1";
+    /// @custom:semver 2.2.0
+    string public constant version = "2.2.0";
 
     /// @notice Constructs the L1CrossDomainMessenger contract.
     constructor() CrossDomainMessenger(Predeploys.L2_CROSS_DOMAIN_MESSENGER) {
