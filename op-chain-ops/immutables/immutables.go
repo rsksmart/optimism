@@ -27,10 +27,7 @@ type PredeploysImmutableConfig struct {
 	L2CrossDomainMessenger struct {
 		OtherMessenger common.Address
 	}
-	L2StandardBridge struct {
-		OtherBridge common.Address
-		Messenger   common.Address
-	}
+	L2StandardBridge  struct{}
 	SequencerFeeVault struct {
 		Recipient           common.Address
 		MinWithdrawalAmount *big.Int
