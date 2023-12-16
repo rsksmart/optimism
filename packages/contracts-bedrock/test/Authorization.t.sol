@@ -73,6 +73,7 @@ contract Authorization_Test is CommonTest {
             _pausable: false
         });
         _addSpec({ _name: "L1CrossDomainMessenger", _sel: _getSel("OTHER_MESSENGER()"), _auth: false, _pausable: false });
+        _addSpec({ _name: "L1CrossDomainMessenger", _sel: _getSel("otherMessenger()"), _auth: false, _pausable: false });
         _addSpec({ _name: "L1CrossDomainMessenger", _sel: _getSel("PORTAL()"), _auth: false, _pausable: false });
         _addSpec({
             _name: "L1CrossDomainMessenger",
@@ -112,7 +113,7 @@ contract Authorization_Test is CommonTest {
         });
         _addSpec({
             _name: "L1CrossDomainMessenger",
-            _sel: _getSel("initialize(address,address)"),
+            _sel: _getSel("initialize(address,address,address)"),
             _auth: false,
             _pausable: false
         });
