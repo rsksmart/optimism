@@ -18,7 +18,7 @@ import (
 type contractData struct {
 	abi          string
 	deployedBin  string
-	deploymentTx etherscan.TxInfo
+	deploymentTx etherscan.Transaction
 }
 
 func (generator *bindGenGeneratorRemote) standardHandler(contractMetadata *remoteContractMetadata) error {

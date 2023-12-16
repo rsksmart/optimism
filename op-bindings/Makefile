@@ -80,3 +80,10 @@ clean:
 
 test:
 	go test ./...
+
+test-bindgen:
+	ETHERSCAN_APIKEY_ETH=$(ETHERSCAN_APIKEY_ETH) \
+	ETHERSCAN_APIKEY_OP=$(ETHERSCAN_APIKEY_OP) \
+	RPC_URL_ETH=$(RPC_URL_ETH) \
+	RPC_URL_OP=$(RPC_URL_OP) \
+	go test ./bindgen/...

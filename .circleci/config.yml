@@ -512,6 +512,29 @@ jobs:
           command: make && git diff --exit-code
           working_directory: op-bindings
 
+  bindgen-remote:
+    docker:
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: xlarge
+    steps:
+      - checkout
+      - run:
+          name: bindgen remote bindings
+          command: make bindgen-remote && git diff --exit-code
+          working_directory: op-bindings
+
+  bindgen-test:
+    docker:
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: xlarge
+    steps:
+      - checkout
+      - run:
+          name: bindgen test
+          command: ETHERSCAN_APIKEY_ETH=foo ETHERSCAN_APIKEY_OP=foo RPC_URL_ETH=foo RPC_URL_OP=foo make test-bindgen
+          working_directory: op-bindings
+      - notify-failures-on-develop
+
   js-lint-test:
     parameters:
       package_name:
@@ -1942,4 +1965,15 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
+
+  scheduled-bindgen:
+    when:
+      equal: [ build_daily, <<pipeline.schedule.name>> ]
+    jobs:
+      - bindgen-remote:
+          context:
+            - slack
+      - bindgen-test:
+          context:
             - slack
