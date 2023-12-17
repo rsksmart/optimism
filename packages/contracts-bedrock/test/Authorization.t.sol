@@ -336,7 +336,12 @@ contract Authorization_Test is CommonTest {
             _pausable: false
         });
         _addSpec({ _name: "OptimismPortal", _sel: _getSel("guardian()"), _auth: false, _pausable: false });
-        _addSpec({ _name: "OptimismPortal", _sel: _getSel("initialize(address,address,address)"), _auth: false, _pausable: false });
+        _addSpec({
+            _name: "OptimismPortal",
+            _sel: _getSel("initialize(address,address,address)"),
+            _auth: false,
+            _pausable: false
+        });
         _addSpec({ _name: "OptimismPortal", _sel: _getSel("isOutputFinalized(uint256)"), _auth: false, _pausable: false });
         _addSpec({ _name: "OptimismPortal", _sel: _getSel("l2Oracle()"), _auth: false, _pausable: false });
         _addSpec({ _name: "OptimismPortal", _sel: _getSel("l2Sender()"), _auth: false, _pausable: false });
