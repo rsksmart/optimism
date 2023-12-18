@@ -18,11 +18,12 @@ reqenv "GS_BATCHER_ADDRESS"
 reqenv "GS_PROPOSER_ADDRESS"
 reqenv "GS_SEQUENCER_ADDRESS"
 reqenv "L1_RPC_URL"
+reqenv "L1_CHAIN_ID"
 
 # Get the finalized block timestamp and hash
-block=$(cast block finalized --rpc-url "$L1_RPC_URL")
+block=$(cast block latest --rpc-url "$L1_RPC_URL")
 timestamp=$(echo "$block" | awk '/timestamp/ { print $2 }')
-blockhash=$(echo "$block" | awk '/hash/ { print $2 }')
+blockhash=$(echo "$block" | awk '$1 == "hash" { print $2 }')
 echo "$block"
 
 # Generate the config file
@@ -33,7 +34,7 @@ config=$(cat << EOL
 
   "l1StartingBlockTag": "$blockhash",
 
-  "l1ChainID": 33,
+  "l1ChainID": $L1_CHAIN_ID,
   "l2ChainID": 42069,
   "l2BlockTime": 2,
   "l1BlockTime": 3,
@@ -92,4 +93,4 @@ EOL
 )
 
 # Write the config file
-echo "$config" > deploy-config/getting_started.json
+echo "$config" > deploy-config/regtest.json

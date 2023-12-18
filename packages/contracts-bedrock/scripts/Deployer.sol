@@ -579,7 +579,9 @@ abstract contract Deployer is Script {
         }
 
         uint256 chainid = vm.envOr("CHAIN_ID", block.chainid);
-        if (chainid == Chains.Mainnet) {
+        if (chainid == Chains.RootstockRegtest) {
+            return "regtest";
+        } else if (chainid == Chains.EthereumMainnet) {
             return "mainnet";
         } else if (chainid == Chains.Goerli) {
             return "goerli";

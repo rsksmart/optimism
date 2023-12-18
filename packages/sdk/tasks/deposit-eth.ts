@@ -28,7 +28,7 @@ task('deposit-eth', 'Deposits ether to L2.')
   .addParam(
     'l2ProviderUrl',
     'L2 provider URL.',
-    'http://localhost:9545',
+    'http://localhost:8545',
     types.string
   )
   .addOptionalParam('to', 'Recipient of the ether', '', types.string)
