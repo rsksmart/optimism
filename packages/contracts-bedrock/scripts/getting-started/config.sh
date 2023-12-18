@@ -20,9 +20,10 @@ reqenv "GS_SEQUENCER_ADDRESS"
 reqenv "L1_RPC_URL"
 
 # Get the finalized block timestamp and hash
-block=$(cast block latest --rpc-url "$L1_RPC_URL")
+block=$(cast block finalized --rpc-url "$L1_RPC_URL")
 timestamp=$(echo "$block" | awk '/timestamp/ { print $2 }')
 blockhash=$(echo "$block" | awk '/hash/ { print $2 }')
+echo "$block"
 
 # Generate the config file
 config=$(cat << EOL
@@ -91,4 +92,4 @@ EOL
 )
 
 # Write the config file
-echo "$config" > deploy-config/regtest.json
+echo "$config" > deploy-config/getting_started.json
