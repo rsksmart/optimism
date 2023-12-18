@@ -356,6 +356,7 @@ abstract contract CrossDomainMessenger is
     }
 
     /// @notice Initializer.
+    /// @param _otherMessenger Address of the paired CrossDomainMessenger contract on the other
     // solhint-disable-next-line func-name-mixedcase
     function __CrossDomainMessenger_init(address _otherMessenger) internal onlyInitializing {
         otherMessenger = _otherMessenger;
