@@ -140,7 +140,7 @@ func TestGethOnlyPendingBlockIsLatest(t *testing.T) {
 		require.Equal(t, pendingBalance, aliceStartBalance, "pending balance must still be the same")
 	}
 
-	startBlock, err := opGeth.L2Client.BlockByNumber(ctx, nil)
+	// startBlock, err := opGeth.L2Client.BlockByNumber(ctx, nil)
 	require.NoError(t, err)
 
 	signer := types.LatestSigner(opGeth.L2ChainConfig)
@@ -149,7 +149,7 @@ func TestGethOnlyPendingBlockIsLatest(t *testing.T) {
 		ChainID:   big.NewInt(int64(cfg.DeployConfig.L2ChainID)),
 		Nonce:     0,
 		GasTipCap: tip,
-		GasFeeCap: new(big.Int).Add(startBlock.BaseFee(), tip),
+		GasFeeCap: new(big.Int).Add(new(big.Int), tip), //new(big.Int).Add(startBlock.BaseFee(), tip),
 		Gas:       1_000_000,
 		To:        &cfg.Secrets.Addresses().Bob,
 		Value:     amount,
