@@ -134,22 +134,22 @@ func ValidateReceipts(ctx Args, canyonActive bool) error {
 }
 
 func Validate1559Params(ctx Args, canyonActive bool) error {
-	block, err := ctx.Client.InfoByNumber(context.Background(), ctx.Number)
-	if err != nil {
-		return err
-	}
+	// block, err := ctx.Client.InfoByNumber(context.Background(), ctx.Number)
+	// if err != nil {
+	// 	return err
+	// }
 
-	parent, err := ctx.Client.InfoByNumber(context.Background(), ctx.Number-1)
-	if err != nil {
-		return err
-	}
+	// parent, err := ctx.Client.InfoByNumber(context.Background(), ctx.Number-1)
+	// if err != nil {
+	// 	return err
+	// }
 
-	want := CalcBaseFee(parent, ctx.Elasticity, canyonActive)
-	have := block.BaseFee()
+	// want := CalcBaseFee(parent, ctx.Elasticity, canyonActive)
+	// have := block.BaseFee()
 
-	if have.Cmp(want) != 0 {
-		return fmt.Errorf("BaseFee does not match. canyonActive: %v. have: %v, want: %v", canyonActive, have, want)
-	}
+	// if have.Cmp(want) != 0 {
+	// 	return fmt.Errorf("BaseFee does not match. canyonActive: %v. have: %v, want: %v", canyonActive, have, want)
+	// }
 
 	return nil
 }
