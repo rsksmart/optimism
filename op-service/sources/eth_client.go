@@ -359,6 +359,9 @@ func (s *EthClient) GetProof(ctx context.Context, address common.Address, storag
 // This should only ever be used as alternative to GetProof when the user opts in.
 // E.g. Erigon L1 node users may have to use this, since Erigon does not support eth_getProof, see https://github.com/ledgerwatch/erigon/issues/1349
 func (s *EthClient) GetStorageAt(ctx context.Context, address common.Address, storageSlot common.Hash, blockTag string) (common.Hash, error) {
+	fmt.Println("----------------address ", address)
+	fmt.Println("----------------storageSlot ", storageSlot)
+	fmt.Println("----------------blockTag ", blockTag)
 	var out common.Hash
 	err := s.client.CallContext(ctx, &out, "eth_getStorageAt", address, storageSlot, blockTag)
 	return out, err
