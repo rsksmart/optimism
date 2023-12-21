@@ -21,6 +21,12 @@ const config: HardhatUserConfig = {
         'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
       ],
     },
+    regtest: {
+      url: process.env.L1_RPC || 'http://localhost:4444',
+      accounts: [
+        '082f57b8084286a079aeb9f2d0e17e565ced44a2cb9ce4844e6d4b9d89f3f595'
+      ]
+    },
     devnetL1: {
       url: 'http://localhost:8545',
       accounts: [
