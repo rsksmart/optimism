@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum-optimism/optimism/op-rsk/rsk-api"
+	"github.com/ethereum-optimism/optimism/op-rsk/rsk-types"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -189,7 +190,7 @@ var Subcommands = cli.Commands{
 				config.SetDeployments(deployments)
 			}
 
-			var l1StartBlock L1Block
+			var l1StartBlock rsk_types.L1Block
 			if l1StartBlockPath != "" {
 				if l1StartBlock, err = readBlockJSON(l1StartBlockPath); err != nil {
 					return fmt.Errorf("cannot read L1 starting block at %s: %w", l1StartBlockPath, err)
@@ -210,7 +211,7 @@ var Subcommands = cli.Commands{
 					tag := rpc.BlockNumberOrHashWithHash(l1StartBlock.Hash(), true)
 					config.L1StartingBlockTag = (*genesis.MarshalableRPCBlockNumberOrHash)(&tag)
 				} else if config.L1StartingBlockTag.BlockHash != nil {
-					l1StartBlock, err = getBlockByHash(*config.L1StartingBlockTag.BlockHash)
+					l1StartBlock, err = rsk_api.GetBlockByHash(l1RPC, *config.L1StartingBlockTag.BlockHash)
 					if err != nil {
 						return fmt.Errorf("cannot fetch block by hash: %w", err)
 					}
@@ -236,13 +237,13 @@ var Subcommands = cli.Commands{
 			log.Info("Using L1 Start Block", "number", l1StartBlock.Number(), "hash", l1StartBlock.Hash().Hex())
 
 			// Build the L2 genesis block
-			l2Genesis, err := genesis.BuildL2Genesis(config, l1StartBlock.(*types.Block))
+			l2Genesis, err := genesis.BuildL2Genesis(config, l1StartBlock)
 			if err != nil {
 				return fmt.Errorf("error creating l2 genesis: %w", err)
 			}
 
 			l2GenesisBlock := l2Genesis.ToBlock()
-			rollupConfig, err := config.RollupConfig(l1StartBlock.(*types.Block), l2GenesisBlock.Hash(), l2GenesisBlock.Number().Uint64())
+			rollupConfig, err := config.RollupConfig(l1StartBlock, l2GenesisBlock.Hash(), l2GenesisBlock.Number().Uint64())
 			if err != nil {
 				return err
 			}
@@ -256,79 +257,6 @@ var Subcommands = cli.Commands{
 			return writeJSONFile(ctx.String("outfile.rollup"), rollupConfig)
 		},
 	},
-}
-
-//go:generate go run github.com/fjl/gencodec -type RootstockBlock -field-override blockMarshaling -out gen_rsk_block_json.go
-//go:generate go run $GOPATH/pkg/mod/github.com/ethereum/go-ethereum@v1.13.5/rlp/rlpgen -type RootstockBlock -out gen_rsk_block_rlp.go
-
-type L1Block interface {
-	Number() *big.Int
-	Hash() common.Hash
-	ParentHash() common.Hash
-	NumberU64() uint64
-	Time() uint64
-	Transactions() types.Transactions
-}
-
-type RootstockBlock struct {
-	types.Block
-	MinimumGasPrice *big.Int `json:"minimumGasPrice" rlp:"optional"`
-}
-
-func (rb *RootstockBlock) Number() *big.Int {
-	return rb.Block.Number()
-}
-
-func (rb *RootstockBlock) Hash() common.Hash {
-	return rb.Block.Hash()
-}
-
-func (rb *RootstockBlock) ParentHash() common.Hash {
-	return rb.Block.ParentHash()
-}
-
-func (rb *RootstockBlock) NumberU64() uint64 {
-	return rb.Block.NumberU64()
-}
-
-func (rb *RootstockBlock) Time() uint64 {
-	return rb.Block.Time()
-}
-
-func (rb *RootstockBlock) Transactions() types.Transactions {
-	return rb.Block.Transactions()
-}
-
-// field type overrides for gencodec
-type blockMarshaling struct {
-	MinimumGasPrice *hexutil.Big
-}
-
-/*
-TODO(iago) Reminder for January :D
-I was running the setup step:
-
-	go run cmd/main.go genesis l2 \
-	    --deploy-config ../packages/contracts-bedrock/deploy-config/getting-started.json \
-	    --deployment-dir ../packages/contracts-bedrock/deployments/getting-started/ \
-	    --outfile.l2 genesis.json \
-	    --outfile.rollup rollup.json \
-	    --l1-rpc $L1_RPC_URL
-*/
-func getBlockByHash(blockHash common.Hash) (*RootstockBlock, error) {
-	// Create a new RPC client
-	client, err := rpc.Dial("http://localhost:4444") // TODO(iago) fix
-	if err != nil {
-		return nil, err
-	}
-
-	var block RootstockBlock
-	err = client.CallContext(context.Background(), &block, "eth_getBlockByHash", blockHash, true)
-	if err != nil {
-		return nil, err
-	}
-
-	return &block, nil
 }
 
 // writeJSONFile will write a JSON file to disk at the given path
