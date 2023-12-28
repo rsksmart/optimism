@@ -3,6 +3,7 @@ package genesis
 import (
 	"errors"
 	"fmt"
+	rsk_types "github.com/ethereum-optimism/optimism/op-rsk/rsk-types"
 	"math/big"
 	"time"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -22,7 +22,7 @@ const defaultGasLimit = 30_000_000
 var BedrockTransitionBlockExtraData = []byte("BEDROCK")
 
 // NewL2Genesis will create a new L2 genesis
-func NewL2Genesis(config *DeployConfig, block *types.Block) (*core.Genesis, error) {
+func NewL2Genesis(config *DeployConfig, block rsk_types.L1Block) (*core.Genesis, error) {
 	if config.L2ChainID == 0 {
 		return nil, errors.New("must define L2 ChainID")
 	}
