@@ -207,13 +207,11 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 	}
 	gasFeeCap := calcGasFeeCap(basefee, gasTipCap)
 
-	rawTx := &types.DynamicFeeTx{
-		ChainID:   m.chainID,
-		To:        candidate.To,
-		GasTipCap: gasTipCap,
-		GasFeeCap: gasFeeCap,
-		Data:      candidate.TxData,
-		Value:     candidate.Value,
+	rawTx := &types.LegacyTx{
+		To:       candidate.To,
+		Data:     candidate.TxData,
+		Value:    candidate.Value,
+		GasPrice: big.NewInt(1),
 	}
 
 	m.l.Info("Creating tx", "to", rawTx.To, "from", m.cfg.From)
@@ -245,7 +243,7 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 // then subsequent calls simply increment this number. If the transaction manager
 // is reset, it will query the eth_getTransactionCount nonce again. If signing
 // fails, the nonce is not incremented.
-func (m *SimpleTxManager) signWithNextNonce(ctx context.Context, rawTx *types.DynamicFeeTx) (*types.Transaction, error) {
+func (m *SimpleTxManager) signWithNextNonce(ctx context.Context, rawTx *types.LegacyTx) (*types.Transaction, error) {
 	m.nonceLock.Lock()
 	defer m.nonceLock.Unlock()
 
@@ -575,14 +573,7 @@ func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *b
 	}
 	cCtx, cancel = context.WithTimeout(ctx, m.cfg.NetworkTimeout)
 	defer cancel()
-	head, err := m.backend.HeaderByNumber(cCtx, nil)
-	if err != nil {
-		m.metr.RPCError()
-		return nil, nil, fmt.Errorf("failed to fetch the suggested basefee: %w", err)
-	} else if head.BaseFee == nil {
-		return nil, nil, errors.New("txmgr does not support pre-london blocks that do not have a basefee")
-	}
-	return tip, head.BaseFee, nil
+	return tip, big.NewInt(1), nil
 }
 
 // calcThresholdValue returns x * priceBumpPercent / 100

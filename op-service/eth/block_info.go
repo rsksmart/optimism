@@ -90,7 +90,10 @@ func (h headerBlockInfo) MixDigest() common.Hash {
 }
 
 func (h headerBlockInfo) BaseFee() *big.Int {
-	return big.NewInt(1)
+	if h.Header.BaseFee == nil {
+		return big.NewInt(1)
+	}
+	return h.Header.BaseFee
 }
 
 func (h headerBlockInfo) ReceiptHash() common.Hash {
