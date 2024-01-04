@@ -35,7 +35,7 @@ config=$(cat << EOL
   "l1ChainID": 33,
   "l2ChainID": 42069,
   "l2BlockTime": 2,
-  "l1BlockTime": 12,
+  "l1BlockTime": 30,
 
   "maxSequencerDrift": 600,
   "sequencerWindowSize": 3600,
@@ -52,7 +52,7 @@ config=$(cat << EOL
   "l2OutputOracleProposer": "$GS_PROPOSER_ADDRESS",
   "l2OutputOracleChallenger": "$GS_ADMIN_ADDRESS",
 
-  "finalizationPeriodSeconds": 12,
+  "finalizationPeriodSeconds": 30,
 
   "proxyAdminOwner": "$GS_ADMIN_ADDRESS",
   "baseFeeVaultRecipient": "$GS_ADMIN_ADDRESS",
@@ -91,4 +91,4 @@ EOL
 )
 
 # Write the config file
-echo "$config" > deploy-config/getting-started.json
+echo "$config" > deploy-config/regtest.json
