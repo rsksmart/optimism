@@ -35,24 +35,24 @@ config=$(cat << EOL
   "l1ChainID": 33,
   "l2ChainID": 42069,
   "l2BlockTime": 2,
-  "l1BlockTime": 30,
+  "l1BlockTime": 3,
 
-  "maxSequencerDrift": 600,
-  "sequencerWindowSize": 3600,
-  "channelTimeout": 300,
+  "maxSequencerDrift": 300,
+  "sequencerWindowSize": 200,
+  "channelTimeout": 120,
 
   "p2pSequencerAddress": "$GS_SEQUENCER_ADDRESS",
   "batchInboxAddress": "0xff00000000000000000000000000000000042069",
   "batchSenderAddress": "$GS_BATCHER_ADDRESS",
 
-  "l2OutputOracleSubmissionInterval": 120,
+  "l2OutputOracleSubmissionInterval": 10,
   "l2OutputOracleStartingBlockNumber": 0,
   "l2OutputOracleStartingTimestamp": $timestamp,
 
   "l2OutputOracleProposer": "$GS_PROPOSER_ADDRESS",
   "l2OutputOracleChallenger": "$GS_ADMIN_ADDRESS",
 
-  "finalizationPeriodSeconds": 30,
+  "finalizationPeriodSeconds": 2,
 
   "proxyAdminOwner": "$GS_ADMIN_ADDRESS",
   "baseFeeVaultRecipient": "$GS_ADMIN_ADDRESS",

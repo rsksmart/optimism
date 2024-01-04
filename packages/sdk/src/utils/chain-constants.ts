@@ -99,7 +99,7 @@ export const CHAIN_BLOCK_TIMES: {
   [L1ChainID.SEPOLIA]: 15 as const,
   [L1ChainID.HARDHAT_LOCAL]: 1 as const,
   [L1ChainID.BEDROCK_LOCAL_DEVNET]: 15 as const,
-  [L1ChainID.REGTEST]: 30 as const,
+  [L1ChainID.REGTEST]: 3 as const,
 }
 
 /**
