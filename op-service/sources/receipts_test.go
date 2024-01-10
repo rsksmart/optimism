@@ -204,7 +204,7 @@ func randomRpcBlockAndReceipts(rng *rand.Rand, txCount uint64) (*rpcBlock, []*ty
 			Extra:       hexutil.Bytes(block.Extra()),
 			MixDigest:   block.MixDigest(),
 			Nonce:       types.EncodeNonce(block.Nonce()),
-			BaseFee:     new(hexutil.Big), //(*hexutil.Big)(block.BaseFee()),
+			BaseFee:     (*hexutil.Big)(block.BaseFee()),
 			Hash:        block.Hash(),
 		},
 		Transactions: block.Transactions(),

@@ -67,7 +67,7 @@ func (h headerInfo) MixDigest() common.Hash {
 }
 
 func (h headerInfo) BaseFee() *big.Int {
-	return h.Header.BaseFee
+	return h.Header.BaseFee // Rootstock: handled to pick minimumGasPrice at op-service/sources/types.go#createGethHeader
 }
 
 func (h headerInfo) ReceiptHash() common.Hash {
@@ -104,7 +104,10 @@ type rpcHeader struct {
 	Nonce       types.BlockNonce `json:"nonce"`
 
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
-	BaseFee *hexutil.Big `json:"baseFeePerGas"`
+	BaseFee *hexutil.Big `json:"baseFeePerGas,omitempty"`
+
+	// Rootstock specific
+	RskMinimumGasPrice *hexutil.Big `json:"minimumGasPrice,omitempty"`
 
 	// WithdrawalsRoot was added by EIP-4895 and is ignored in legacy headers.
 	WithdrawalsRoot *common.Hash `json:"withdrawalsRoot,omitempty"`
@@ -122,9 +125,17 @@ type rpcHeader struct {
 	Hash common.Hash `json:"hash"`
 }
 
+func (hdr *rpcHeader) isL1Block() bool {
+	return hdr.RskMinimumGasPrice != nil
+}
+
 // checkPostMerge checks that the block header meets all criteria to be a valid ExecutionPayloadHeader,
 // see EIP-3675 (block header changes) and EIP-4399 (mixHash usage for prev-randao)
 func (hdr *rpcHeader) checkPostMerge() error {
+	if hdr.isL1Block() {
+		return nil
+	}
+
 	// TODO: the genesis block has a non-zero difficulty number value.
 	// Either this block needs to change, or we special case it. This is not valid w.r.t. EIP-3675.
 	if hdr.Number != 0 && (*big.Int)(&hdr.Difficulty).Cmp(common.Big0) != 0 {
@@ -146,11 +157,23 @@ func (hdr *rpcHeader) checkPostMerge() error {
 }
 
 func (hdr *rpcHeader) computeBlockHash() common.Hash {
-	gethHeader := hdr.createGethHeader()
-	return gethHeader.Hash()
+	if hdr.isL1Block() {
+		// TODO(rootstock) properly compute Rootstock hash from fields: for this we need a 100% mapped Rootstock block
+		return hdr.Hash
+	} else {
+		gethHeader := hdr.createGethHeader()
+		return gethHeader.Hash()
+	}
 }
 
 func (hdr *rpcHeader) createGethHeader() *types.Header {
+	var baseFee *hexutil.Big
+	if hdr.isL1Block() {
+		baseFee = hdr.RskMinimumGasPrice
+	} else {
+		baseFee = hdr.BaseFee
+	}
+
 	return &types.Header{
 		ParentHash:      hdr.ParentHash,
 		UncleHash:       hdr.UncleHash,
@@ -167,7 +190,7 @@ func (hdr *rpcHeader) createGethHeader() *types.Header {
 		Extra:           hdr.Extra,
 		MixDigest:       hdr.MixDigest,
 		Nonce:           hdr.Nonce,
-		BaseFee:         (*big.Int)(hdr.BaseFee),
+		BaseFee:         (*big.Int)(baseFee),
 		WithdrawalsHash: hdr.WithdrawalsRoot,
 		// Cancun
 		BlobGasUsed:      (*uint64)(hdr.BlobGasUsed),
@@ -187,6 +210,7 @@ func (hdr *rpcHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo
 			return nil, fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, hdr.Hash)
 		}
 	}
+
 	return &headerInfo{hdr.Hash, hdr.createGethHeader()}, nil
 }
 
@@ -265,8 +289,19 @@ func (block *rpcBlock) ExecutionPayload(trustCache bool) (*eth.ExecutionPayload,
 			return nil, err
 		}
 	}
+
+	// TODO(rootstock) As per our checks, this logic could be called from PrefetchingEthClient (via EthClient#PayloadXXX methods), which is L1 related
+	// that's the reason for handling the potentially missing BaseFee field here
+	// but it seems to not be used right now (by default) for the PoC at least, adding a log just to spot it otherwise
+	// (check related log on l1_client#NewL1Client func)
+
 	var baseFee uint256.Int
-	baseFee.SetFromBig((*big.Int)(block.BaseFee))
+	if block.isL1Block() {
+		fmt.Printf("==== Unexpected L1 block usage on ExecutionPayload ====")
+		baseFee.SetFromBig((*big.Int)(block.RskMinimumGasPrice))
+	} else {
+		baseFee.SetFromBig((*big.Int)(block.BaseFee))
+	}
 
 	// Unfortunately eth_getBlockByNumber either returns full transactions, or only tx-hashes.
 	// There is no option for encoded transactions.

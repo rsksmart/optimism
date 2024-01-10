@@ -207,7 +207,7 @@ func (s *EthClient) headerCall(ctx context.Context, method string, id rpcBlockID
 }
 
 func (s *EthClient) blockCall(ctx context.Context, method string, id rpcBlockID) (eth.BlockInfo, types.Transactions, error) {
-	var block *rpcBlock
+	var block *rpcBlock // Rootstock: as per our checks, every other client instance has EthClient as an inner, so we should be covered regarding BaseFee / minimumGasPrice mapping when needed
 	err := s.client.CallContext(ctx, &block, method, id.Arg(), true)
 	if err != nil {
 		return nil, nil, err

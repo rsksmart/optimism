@@ -72,7 +72,7 @@ func (info *L1BlockInfo) MarshalBinary() ([]byte, error) {
 	if err := solabi.WriteUint64(w, info.Time); err != nil {
 		return nil, err
 	}
-	if err := solabi.WriteUint256(w, info.BaseFee); err != nil {
+	if err := solabi.WriteUint256(w, info.BaseFee); err != nil { // Rootstock: already dealt with BaseFee on construction
 		return nil, err
 	}
 	if err := solabi.WriteHash(w, info.BlockHash); err != nil {
@@ -109,7 +109,7 @@ func (info *L1BlockInfo) UnmarshalBinary(data []byte) error {
 	if info.Time, err = solabi.ReadUint64(reader); err != nil {
 		return err
 	}
-	if info.BaseFee, err = solabi.ReadUint256(reader); err != nil {
+	if info.BaseFee, err = solabi.ReadUint256(reader); err != nil { // Rootstock: already dealt with BaseFee on construction
 		return err
 	}
 	if info.BlockHash, err = solabi.ReadHash(reader); err != nil {
@@ -146,12 +146,13 @@ func L1InfoDeposit(seqNumber uint64, block eth.BlockInfo, sysCfg eth.SystemConfi
 	infoDat := L1BlockInfo{
 		Number:         block.NumberU64(),
 		Time:           block.Time(),
-		BaseFee:        block.BaseFee(),
+		BaseFee:        block.BaseFee(), // Rootstock: already dealt with in caller
 		BlockHash:      block.Hash(),
 		SequenceNumber: seqNumber,
 		BatcherAddr:    sysCfg.BatcherAddr,
-		L1FeeOverhead:  sysCfg.Overhead,
-		L1FeeScalar:    sysCfg.Scalar,
+		// TODO(rootstock) we should probably have to tweak these config values
+		L1FeeOverhead: sysCfg.Overhead,
+		L1FeeScalar:   sysCfg.Scalar,
 	}
 	data, err := infoDat.MarshalBinary()
 	if err != nil {

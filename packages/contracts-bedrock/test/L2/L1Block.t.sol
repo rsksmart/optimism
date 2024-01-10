@@ -45,7 +45,7 @@ contract L1BlockTest is CommonTest {
         l1Block.setL1BlockValues(n, t, b, h, s, bt, fo, fs);
         assertEq(l1Block.number(), n);
         assertEq(l1Block.timestamp(), t);
-        // assertEq(l1Block.basefee(), b);
+        assertEq(l1Block.basefee(), b); // Rootstock: it should be present after our changes, if not, investigate
         assertEq(l1Block.hash(), h);
         assertEq(l1Block.sequenceNumber(), s);
         assertEq(l1Block.batcherHash(), bt);
@@ -65,7 +65,7 @@ contract L1BlockTest is CommonTest {
 
     /// @dev Tests that `basefee` returns the correct value.
     function test_basefee_succeeds() external {
-        // assertEq(l1Block.basefee(), 3);
+        assertEq(l1Block.basefee(), 3); // Rootstock: it should be present after our changes, if not, investigate
     }
 
     /// @dev Tests that `hash` returns the correct value.
