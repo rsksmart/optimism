@@ -364,11 +364,21 @@ func (s *EthClient) GetStorageAt(ctx context.Context, address common.Address, st
 	return out, err
 }
 
+// Rootstock does not accept blockHash as a blockTag, but it accepts it as a map
+func (s *EthClient) GetStorageAtRsk(ctx context.Context, address common.Address, storageSlot common.Hash, blockHash string) (common.Hash, error) {
+	var out common.Hash
+	blockData := map[string]string{
+		"blockHash": blockHash,
+	}
+	err := s.client.CallContext(ctx, &out, "eth_getStorageAt", address, storageSlot, blockData)
+	return out, err
+}
+
 // ReadStorageAt is a convenience method to read a single storage value at the given slot in the given account.
 // The storage slot value is verified against the state-root of the given block if we do not trust the RPC provider, or directly retrieved without proof if we do trust the RPC.
 func (s *EthClient) ReadStorageAt(ctx context.Context, address common.Address, storageSlot common.Hash, blockHash common.Hash) (common.Hash, error) {
 	if s.trustRPC {
-		return s.GetStorageAt(ctx, address, storageSlot, blockHash.String())
+		return s.GetStorageAtRsk(ctx, address, storageSlot, blockHash.String())
 	}
 	block, err := s.InfoByHash(ctx, blockHash)
 	if err != nil {
