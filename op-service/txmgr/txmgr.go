@@ -571,6 +571,8 @@ func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *b
 	} else if tip == nil {
 		return nil, nil, errors.New("the suggested tip was nil")
 	}
+
+	// TODO(iago-510 check if L1 or L2)
 	// cCtx, cancel = context.WithTimeout(ctx, m.cfg.NetworkTimeout)
 	// defer cancel()
 	// head, err := m.backend.HeaderByNumber(cCtx, nil)

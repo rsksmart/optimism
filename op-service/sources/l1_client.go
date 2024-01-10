@@ -77,8 +77,10 @@ func NewL1Client(client client.RPC, log log.Logger, metrics caching.Metrics, con
 		if err != nil {
 			return nil, err
 		}
+		log.Debug("Using prefetchingEthClient for new L1 client")
 		clientToUse = prefetchingEthClient
 	} else {
+		log.Debug("Using ethClient for new L1 client")
 		clientToUse = ethClient
 	}
 

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum-optimism/optimism/op-rsk/rsk-api"
+	rsk_api "github.com/ethereum-optimism/optimism/op-rsk/rsk-api"
 	"github.com/ethereum-optimism/optimism/op-rsk/rsk-types"
 	"math/big"
 	"os"
@@ -209,6 +209,9 @@ var Subcommands = cli.Commands{
 				}
 
 				if config.L1StartingBlockTag == nil {
+
+					// TODO(iago-510) INTENTAR HACER el mapeo BaseFee en la librería /op-geth/ethclient/ethclient.go#getBlock
+
 					l1StartBlock, err = client.BlockByNumber(context.Background(), nil)
 					if err != nil {
 						return fmt.Errorf("cannot fetch latest block: %w", err)
