@@ -200,7 +200,12 @@ var Subcommands = cli.Commands{
 			if l1RPC != "" {
 				client, err := ethclient.Dial(l1RPC)
 				if err != nil {
-					return fmt.Errorf("cannot dial %s: %w", l1RPC, err)
+					return fmt.Errorf("cannot dial %s: %w for ethclient", l1RPC, err)
+				}
+
+				rskClient, err := rsk_api.Dial(l1RPC)
+				if err != nil {
+					return fmt.Errorf("cannot dial %s: %w for rskClient", l1RPC, err)
 				}
 
 				if config.L1StartingBlockTag == nil {
@@ -211,7 +216,7 @@ var Subcommands = cli.Commands{
 					tag := rpc.BlockNumberOrHashWithHash(l1StartBlock.Hash(), true)
 					config.L1StartingBlockTag = (*genesis.MarshalableRPCBlockNumberOrHash)(&tag)
 				} else if config.L1StartingBlockTag.BlockHash != nil {
-					l1StartBlock, err = rsk_api.GetBlockByHash(l1RPC, *config.L1StartingBlockTag.BlockHash)
+					l1StartBlock, err = rskClient.GetBlockByHash(*config.L1StartingBlockTag.BlockHash)
 					if err != nil {
 						return fmt.Errorf("cannot fetch block by hash: %w", err)
 					}
