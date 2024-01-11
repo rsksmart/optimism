@@ -49,33 +49,3 @@ __pycache__
 
 # Ignore echidna artifacts
 crytic-export
-
-# Temporary ignore
-.vscode/launch.json
-op-chain-ops/genesis/config.go
-op-node/cmd/__debug_bin2956166942
-packages/contracts-bedrock/deploy-config/regtest.json
-packages/contracts-bedrock/deployments/regtest/.chainId
-packages/contracts-bedrock/deployments/regtest/AddressManager.json
-packages/contracts-bedrock/deployments/regtest/DisputeGameFactoryProxy.json
-packages/contracts-bedrock/deployments/regtest/L1CrossDomainMessenger.json
-packages/contracts-bedrock/deployments/regtest/L1CrossDomainMessengerProxy.json
-packages/contracts-bedrock/deployments/regtest/L1ERC721Bridge.json
-packages/contracts-bedrock/deployments/regtest/L1ERC721BridgeProxy.json
-packages/contracts-bedrock/deployments/regtest/L1StandardBridge.json
-packages/contracts-bedrock/deployments/regtest/L1StandardBridgeProxy.json
-packages/contracts-bedrock/deployments/regtest/L2OutputOracle.json
-packages/contracts-bedrock/deployments/regtest/L2OutputOracleProxy.json
-packages/contracts-bedrock/deployments/regtest/OptimismMintableERC20Factory.json
-packages/contracts-bedrock/deployments/regtest/OptimismMintableERC20FactoryProxy.json
-packages/contracts-bedrock/deployments/regtest/OptimismPortal.json
-packages/contracts-bedrock/deployments/regtest/OptimismPortalProxy.json
-packages/contracts-bedrock/deployments/regtest/ProtocolVersions.json
-packages/contracts-bedrock/deployments/regtest/ProtocolVersionsProxy.json
-packages/contracts-bedrock/deployments/regtest/ProxyAdmin.json
-packages/contracts-bedrock/deployments/regtest/SafeProxyFactory.json
-packages/contracts-bedrock/deployments/regtest/SafeSingleton.json
-packages/contracts-bedrock/deployments/regtest/SuperchainConfig.json
-packages/contracts-bedrock/deployments/regtest/SuperchainConfigProxy.json
-packages/contracts-bedrock/deployments/regtest/SystemConfig.json
-packages/contracts-bedrock/deployments/regtest/SystemConfigProxy.json

@@ -134,3 +134,21 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 | :rocket:    | Liftoff, We Have Liftoff|
 |---------------|:----------------------------------------|
 ||[get hacking](https://docs.optimism.io/builders/chain-operators/hacks/overview)|
+
+#### TTY 6 test setup
+
+deposit some RBTC using sdk
+
+```
+cd packages/sdk
+npx hardhat deposit-eth --to 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 --amount 100 --network regtest --withdraw false;
+```
+
+> [!NOTE]
+> the `withdraw false` is necessary at the moment as withdrawal not yet supported on RSK
+
+and to verify the balance
+
+```
+cast balance 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 --rpc-url http://localhost:8545
+```
