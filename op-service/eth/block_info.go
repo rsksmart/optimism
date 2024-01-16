@@ -90,7 +90,7 @@ func (h headerBlockInfo) MixDigest() common.Hash {
 }
 
 func (h headerBlockInfo) BaseFee() *big.Int {
-	return h.Header.BaseFee() // Rootstock: check `func HeaderBlockInfo(h *types.Header) BlockInfo`
+	return h.Header.BaseFee()
 }
 
 func (h headerBlockInfo) ReceiptHash() common.Hash {
@@ -111,9 +111,5 @@ func (h headerBlockInfo) HeaderRLP() ([]byte, error) {
 
 // HeaderBlockInfo returns h as a BlockInfo implementation.
 func HeaderBlockInfo(h *types.Header) BlockInfo {
-	// Rootstock: no need to care about BaseFee for now here since its usages are:
-	// 1. Batcher generating a L1BlockRef: it has no BaseFee
-	// 2. L2OutputRoot generation: it has no BaseFee
-	// 3. PreImage Oracle (used for the FP system): we don't care about it for now
 	return headerBlockInfo{h}
 }
