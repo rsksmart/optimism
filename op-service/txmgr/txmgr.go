@@ -572,17 +572,18 @@ func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *b
 		return nil, nil, errors.New("the suggested tip was nil")
 	}
 
-	// TODO(iago-510 check if L1 or L2)
-	// cCtx, cancel = context.WithTimeout(ctx, m.cfg.NetworkTimeout)
-	// defer cancel()
-	// head, err := m.backend.HeaderByNumber(cCtx, nil)
-	// if err != nil {
-	// 	m.metr.RPCError()
-	// 	return nil, nil, fmt.Errorf("failed to fetch the suggested basefee: %w", err)
-	// } else if head.BaseFee == nil {
-	// 	return nil, nil, errors.New("txmgr does not support pre-london blocks that do not have a basefee")
-	// }
-	return tip, big.NewInt(1), nil
+	cCtx, cancel = context.WithTimeout(ctx, m.cfg.NetworkTimeout)
+	defer cancel()
+	head, err := m.backend.HeaderByNumber(cCtx, nil)
+	if err != nil {
+		m.metr.RPCError()
+		return nil, nil, fmt.Errorf("failed to fetch the suggested basefee: %w", err)
+	} else if head.BaseFee() == nil {
+		return nil, nil, errors.New("txmgr does not support pre-london blocks that do not have a basefee")
+	}
+
+	// TODO(iago-510 think about these BaseFee & tip thingies)
+	return tip, head.BaseFee(), nil
 }
 
 // calcThresholdValue returns x * priceBumpPercent / 100

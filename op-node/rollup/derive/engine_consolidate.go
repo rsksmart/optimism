@@ -87,6 +87,8 @@ func logL1InfoTxns(l log.Logger, l2Number, l2Timestamp uint64, safeTx, unsafeTx 
 		return
 	}
 
+	// Rootstock: safeTx & unsafeTx come from ExecutionPayload that should have handled BaseFee for L1 blocks
+
 	// Then decode the ABI encoded parameters
 	var safeInfo, unsafeInfo L1BlockInfo
 	errSafe = (&safeInfo).UnmarshalBinary(safeTxValue.Data())
@@ -96,15 +98,13 @@ func logL1InfoTxns(l log.Logger, l2Number, l2Timestamp uint64, safeTx, unsafeTx 
 		return
 	}
 
-	// TODO(iago-510 check if L1 or L2) deal with the potential differs due to BaseFee
-
 	l.Error("L1 Info transaction differs", "number", l2Number, "time", l2Timestamp,
 		"safe_l1_number", safeInfo.Number, "safe_l1_hash", safeInfo.BlockHash,
 		"safe_l1_time", safeInfo.Time, "safe_seq_num", safeInfo.SequenceNumber,
-		"safe_l1_basefee", safeInfo.BaseFee, "safe_batcher_add", safeInfo.BlockHash, // TODO(iago-510 check if L1 or L2)
+		"safe_l1_basefee", safeInfo.BaseFee, "safe_batcher_add", safeInfo.BlockHash,
 		"safe_gpo_scalar", safeInfo.L1FeeScalar, "safe_gpo_overhead", safeInfo.L1FeeOverhead,
 		"unsafe_l1_number", unsafeInfo.Number, "unsafe_l1_hash", unsafeInfo.BlockHash,
 		"unsafe_l1_time", unsafeInfo.Time, "unsafe_seq_num", unsafeInfo.SequenceNumber,
-		"unsafe_l1_basefee", unsafeInfo.BaseFee, "unsafe_batcher_add", unsafeInfo.BlockHash, // TODO(iago-510 check if L1 or L2)
+		"unsafe_l1_basefee", unsafeInfo.BaseFee, "unsafe_batcher_add", unsafeInfo.BlockHash,
 		"unsafe_gpo_scalar", unsafeInfo.L1FeeScalar, "unsafe_gpo_overhead", unsafeInfo.L1FeeOverhead)
 }

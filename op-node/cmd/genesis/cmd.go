@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	rsk_api "github.com/ethereum-optimism/optimism/op-rsk/rsk-api"
-	"github.com/ethereum-optimism/optimism/op-rsk/rsk-types"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -190,7 +188,7 @@ var Subcommands = cli.Commands{
 				config.SetDeployments(deployments)
 			}
 
-			var l1StartBlock rsk_types.L1Block
+			var l1StartBlock *types.Block
 			if l1StartBlockPath != "" {
 				if l1StartBlock, err = readBlockJSON(l1StartBlockPath); err != nil {
 					return fmt.Errorf("cannot read L1 starting block at %s: %w", l1StartBlockPath, err)
@@ -202,16 +200,7 @@ var Subcommands = cli.Commands{
 				if err != nil {
 					return fmt.Errorf("cannot dial %s: %w for ethclient", l1RPC, err)
 				}
-
-				rskClient, err := rsk_api.Dial(l1RPC)
-				if err != nil {
-					return fmt.Errorf("cannot dial %s: %w for rskClient", l1RPC, err)
-				}
-
 				if config.L1StartingBlockTag == nil {
-
-					// TODO(iago-510) INTENTAR HACER el mapeo BaseFee en la librería /op-geth/ethclient/ethclient.go#getBlock
-
 					l1StartBlock, err = client.BlockByNumber(context.Background(), nil)
 					if err != nil {
 						return fmt.Errorf("cannot fetch latest block: %w", err)
@@ -219,7 +208,7 @@ var Subcommands = cli.Commands{
 					tag := rpc.BlockNumberOrHashWithHash(l1StartBlock.Hash(), true)
 					config.L1StartingBlockTag = (*genesis.MarshalableRPCBlockNumberOrHash)(&tag)
 				} else if config.L1StartingBlockTag.BlockHash != nil {
-					l1StartBlock, err = rskClient.GetBlockByHash(*config.L1StartingBlockTag.BlockHash)
+					l1StartBlock, err = client.BlockByHash(context.Background(), *config.L1StartingBlockTag.BlockHash)
 					if err != nil {
 						return fmt.Errorf("cannot fetch block by hash: %w", err)
 					}

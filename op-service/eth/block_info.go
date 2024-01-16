@@ -90,7 +90,7 @@ func (h headerBlockInfo) MixDigest() common.Hash {
 }
 
 func (h headerBlockInfo) BaseFee() *big.Int {
-	return h.Header.BaseFee // Rootstock: check `func HeaderBlockInfo(h *types.Header) BlockInfo`
+	return h.Header.BaseFee() // Rootstock: check `func HeaderBlockInfo(h *types.Header) BlockInfo`
 }
 
 func (h headerBlockInfo) ReceiptHash() common.Hash {

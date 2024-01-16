@@ -194,7 +194,7 @@ func (payload *ExecutionPayload) CheckBlockHash() (actual common.Hash, ok bool) 
 		Extra:       payload.ExtraData,
 		MixDigest:   common.Hash(payload.PrevRandao),
 		Nonce:       types.BlockNonce{}, // zeroed, proof-of-work legacy
-		BaseFee:     payload.BaseFeePerGas.ToBig(),
+		EthBaseFee:  payload.BaseFeePerGas.ToBig(),
 	}
 
 	if payload.CanyonBlock() {
