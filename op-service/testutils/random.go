@@ -267,7 +267,7 @@ func RandomHeader(rng *rand.Rand) *types.Header {
 		Extra:       RandomData(rng, rng.Intn(33)),
 		MixDigest:   common.Hash{},
 		Nonce:       types.BlockNonce{},
-		BaseFee:     big.NewInt(rng.Int63n(300_000_000_000)),
+		EthBaseFee:  big.NewInt(rng.Int63n(300_000_000_000)),
 	}
 }
 
@@ -284,7 +284,7 @@ func RandomBlockPrependTxs(rng *rand.Rand, txCount int, ptxs ...*types.Transacti
 	txs := make([]*types.Transaction, 0, txCount+len(ptxs))
 	txs = append(txs, ptxs...)
 	for i := 0; i < txCount; i++ {
-		txs = append(txs, RandomTx(rng, header.BaseFee, signer))
+		txs = append(txs, RandomTx(rng, header.BaseFee(), signer))
 	}
 	receipts := make([]*types.Receipt, 0, len(txs))
 	cumulativeGasUsed := uint64(0)

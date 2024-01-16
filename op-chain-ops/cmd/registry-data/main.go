@@ -176,7 +176,7 @@ func entrypoint(ctx *cli.Context) error {
 			Number:     genesisHeader.Number.Uint64(),
 			GasUsed:    genesisHeader.GasUsed,
 			ParentHash: genesisHeader.ParentHash,
-			BaseFee:    (*hexutil.Big)(genesisHeader.BaseFee),
+			BaseFee:    (*hexutil.Big)(genesisHeader.BaseFee()),
 			Alloc:      make(jsonutil.LazySortedJsonMap[common.Address, GenesisAccount]),
 			StateHash:  &genesisHeader.Root,
 		}

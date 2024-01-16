@@ -31,7 +31,7 @@ func TestL1Miner_BuildBlock(gt *testing.T) {
 		ChainID:   sd.L1Cfg.Config.ChainID,
 		Nonce:     0,
 		GasTipCap: big.NewInt(2 * params.GWei),
-		GasFeeCap: new(big.Int).Add(miner.l1Chain.CurrentBlock().BaseFee, big.NewInt(2*params.GWei)),
+		GasFeeCap: new(big.Int).Add(miner.l1Chain.CurrentBlock().BaseFee(), big.NewInt(2*params.GWei)),
 		Gas:       params.TxGas,
 		To:        &dp.Addresses.Bob,
 		Value:     e2eutils.Ether(2),

@@ -127,7 +127,7 @@ func (s *BasicUser[B]) ActResetTxOpts(t Testing) {
 	require.NoError(t, err, "need l2 latest header for accurate basefee info")
 
 	gasTipCap := big.NewInt(2 * params.GWei)
-	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(latestHeader.BaseFee, big.NewInt(2)))
+	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(latestHeader.BaseFee(), big.NewInt(2)))
 
 	s.txOpts = bind.TransactOpts{
 		From:      s.address,

@@ -218,7 +218,7 @@ func (s *L2Batcher) ActL2BatchSubmit(t Testing, txOpts ...func(tx *types.Dynamic
 	gasTipCap := big.NewInt(2 * params.GWei)
 	pendingHeader, err := s.l1.HeaderByNumber(t.Ctx(), big.NewInt(-1))
 	require.NoError(t, err, "need l1 pending header for gas price estimation")
-	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(pendingHeader.BaseFee, big.NewInt(2)))
+	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(pendingHeader.BaseFee(), big.NewInt(2)))
 
 	rawTx := &types.DynamicFeeTx{
 		ChainID:   s.rollupCfg.L1ChainID,
@@ -304,7 +304,7 @@ func (s *L2Batcher) ActL2BatchSubmitGarbage(t Testing, kind GarbageKind) {
 	gasTipCap := big.NewInt(2 * params.GWei)
 	pendingHeader, err := s.l1.HeaderByNumber(t.Ctx(), big.NewInt(-1))
 	require.NoError(t, err, "need l1 pending header for gas price estimation")
-	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(pendingHeader.BaseFee, big.NewInt(2)))
+	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(pendingHeader.BaseFee(), big.NewInt(2)))
 
 	rawTx := &types.DynamicFeeTx{
 		ChainID:   s.rollupCfg.L1ChainID,

@@ -525,7 +525,7 @@ func TestMixedWithdrawalValidity(t *testing.T) {
 			require.Nil(t, err)
 
 			// Calculate gas fees for the withdrawal in L2 to later adjust our balance.
-			withdrawalL2GasFee := calcGasFees(receipt.GasUsed, tx.GasTipCap(), tx.GasFeeCap(), header.BaseFee)
+			withdrawalL2GasFee := calcGasFees(receipt.GasUsed, tx.GasTipCap(), tx.GasFeeCap(), header.BaseFee())
 
 			// Adjust our expected L2 balance (should've decreased by withdraw amount + fees)
 			transactor.ExpectedL2Balance = new(big.Int).Sub(transactor.ExpectedL2Balance, withdrawAmount)
@@ -651,7 +651,7 @@ func TestMixedWithdrawalValidity(t *testing.T) {
 
 				// Ensure that withdrawal - gas fees are added to the L1 balance
 				// Fun fact, the fee is greater than the withdrawal amount
-				withdrawalL1GasFee := calcGasFees(receipt.GasUsed, tx.GasTipCap(), tx.GasFeeCap(), header.BaseFee)
+				withdrawalL1GasFee := calcGasFees(receipt.GasUsed, tx.GasTipCap(), tx.GasFeeCap(), header.BaseFee())
 				transactor.ExpectedL1Balance = new(big.Int).Add(transactor.ExpectedL2Balance, withdrawAmount)
 				transactor.ExpectedL1Balance = new(big.Int).Sub(transactor.ExpectedL2Balance, withdrawalL1GasFee)
 				transactor.ExpectedL1Nonce++

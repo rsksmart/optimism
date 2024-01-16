@@ -113,7 +113,7 @@ func TestL2EngineAPIBlockBuilding(gt *testing.T) {
 		ChainID:   sd.L2Cfg.Config.ChainID,
 		Nonce:     0,
 		GasTipCap: big.NewInt(2 * params.GWei),
-		GasFeeCap: new(big.Int).Add(engine.l2Chain.CurrentBlock().BaseFee, big.NewInt(2*params.GWei)),
+		GasFeeCap: new(big.Int).Add(engine.l2Chain.CurrentBlock().BaseFee(), big.NewInt(2*params.GWei)),
 		Gas:       params.TxGas,
 		To:        &dp.Addresses.Bob,
 		Value:     e2eutils.Ether(2),

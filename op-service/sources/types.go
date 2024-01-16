@@ -104,7 +104,7 @@ type rpcHeader struct {
 	Nonce       types.BlockNonce `json:"nonce"`
 
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
-	BaseFee *hexutil.Big `json:"baseFeePerGas,omitempty"`
+	EthBaseFee *hexutil.Big `json:"baseFeePerGas,omitempty"`
 
 	// Rootstock specific
 	RskMinimumGasPrice *hexutil.Big `json:"minimumGasPrice,omitempty"`
@@ -129,6 +129,14 @@ func (hdr *rpcHeader) isL1Block() bool {
 	return hdr.RskMinimumGasPrice != nil
 }
 
+func (h *rpcHeader) BaseFee() *hexutil.Big {
+	if h.isL1Block() {
+		return h.RskMinimumGasPrice
+	} else {
+		return h.EthBaseFee
+	}
+}
+
 // checkPostMerge checks that the block header meets all criteria to be a valid ExecutionPayloadHeader,
 // see EIP-3675 (block header changes) and EIP-4399 (mixHash usage for prev-randao)
 func (hdr *rpcHeader) checkPostMerge() error {
@@ -144,8 +152,8 @@ func (hdr *rpcHeader) checkPostMerge() error {
 	if hdr.Nonce != (types.BlockNonce{}) {
 		return fmt.Errorf("post-merge block header requires zeroed block nonce field, but got: %s", hdr.Nonce)
 	}
-	if hdr.BaseFee == nil {
-		return fmt.Errorf("post-merge block header requires EIP-1559 basefee field, but got %s", hdr.BaseFee)
+	if hdr.BaseFee() == nil {
+		return fmt.Errorf("post-merge block header requires EIP-1559 basefee field, but got %s", hdr.BaseFee())
 	}
 	if len(hdr.Extra) > 32 {
 		return fmt.Errorf("post-merge block header requires 32 or less bytes of extra data, but got %d", len(hdr.Extra))
@@ -168,10 +176,10 @@ func (hdr *rpcHeader) computeBlockHash() common.Hash {
 
 func (hdr *rpcHeader) createGethHeader() *types.Header {
 	var baseFee *hexutil.Big
-	if hdr.isL1Block() {
+	if hdr.isL1Block() { // TODO(iago-510) probably no longer needed
 		baseFee = hdr.RskMinimumGasPrice
 	} else {
-		baseFee = hdr.BaseFee
+		baseFee = hdr.BaseFee()
 	}
 
 	return &types.Header{
@@ -300,7 +308,7 @@ func (block *rpcBlock) ExecutionPayload(trustCache bool) (*eth.ExecutionPayload,
 		fmt.Printf("==== Unexpected L1 block usage on ExecutionPayload ====")
 		baseFee.SetFromBig((*big.Int)(block.RskMinimumGasPrice))
 	} else {
-		baseFee.SetFromBig((*big.Int)(block.BaseFee))
+		baseFee.SetFromBig((*big.Int)(block.BaseFee())) // TODO(iago-510) probably not needed
 	}
 
 	// Unfortunately eth_getBlockByNumber either returns full transactions, or only tx-hashes.
