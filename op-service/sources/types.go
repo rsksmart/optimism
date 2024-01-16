@@ -67,7 +67,7 @@ func (h headerInfo) MixDigest() common.Hash {
 }
 
 func (h headerInfo) BaseFee() *big.Int {
-	return h.Header.BaseFee // Rootstock: handled to pick minimumGasPrice at op-service/sources/types.go#createGethHeader
+	return h.Header.BaseFee() // Rootstock: handled to pick minimumGasPrice at op-service/sources/types.go#createGethHeader
 }
 
 func (h headerInfo) ReceiptHash() common.Hash {
@@ -190,7 +190,7 @@ func (hdr *rpcHeader) createGethHeader() *types.Header {
 		Extra:           hdr.Extra,
 		MixDigest:       hdr.MixDigest,
 		Nonce:           hdr.Nonce,
-		BaseFee:         (*big.Int)(baseFee),
+		EthBaseFee:      (*big.Int)(baseFee),
 		WithdrawalsHash: hdr.WithdrawalsRoot,
 		// Cancun
 		BlobGasUsed:      (*uint64)(hdr.BlobGasUsed),

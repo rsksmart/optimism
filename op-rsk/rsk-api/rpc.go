@@ -24,10 +24,8 @@ func Dial(rawurl string) (*Client, error) {
 	return &Client{c: client}, nil
 }
 
+// TODO(rootstock) remove if finally not needed, leaving it as an example
 func (ec *Client) GetBlockByHash(blockHash common.Hash) (rsk_types.L1Block, error) {
-
-	// TODO(iago-510) pensar si hace falta
-
 	var header rsk_types.RskHeader
 	err := ec.c.CallContext(context.Background(), &header, "eth_getBlockByHash", blockHash, true)
 	if err != nil {

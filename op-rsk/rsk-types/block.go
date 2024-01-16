@@ -7,6 +7,8 @@ import (
 	"math/big"
 )
 
+// TODO(rootstock) remove this file if  finally not needed, leaving it as an example
+
 type L1Block interface {
 	Number() *big.Int
 	NumberU64() uint64

@@ -2,8 +2,8 @@ package genesis
 
 import (
 	"fmt"
-	"github.com/ethereum-optimism/optimism/op-rsk/rsk-types"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
@@ -13,7 +13,7 @@ import (
 )
 
 // BuildL2Genesis will build the L2 genesis block.
-func BuildL2Genesis(config *DeployConfig, l1StartBlock rsk_types.L1Block) (*core.Genesis, error) {
+func BuildL2Genesis(config *DeployConfig, l1StartBlock *types.Block) (*core.Genesis, error) {
 	genspec, err := NewL2Genesis(config, l1StartBlock)
 	if err != nil {
 		return nil, err

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum-optimism/optimism/op-rsk/rsk-types"
+	"github.com/ethereum/go-ethereum/core/types"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -523,7 +523,7 @@ func (d *DeployConfig) InteropTime(genesisTime uint64) *uint64 {
 }
 
 // RollupConfig converts a DeployConfig to a rollup.Config
-func (d *DeployConfig) RollupConfig(l1StartBlock rsk_types.L1Block, l2GenesisBlockHash common.Hash, l2GenesisBlockNumber uint64) (*rollup.Config, error) {
+func (d *DeployConfig) RollupConfig(l1StartBlock *types.Block, l2GenesisBlockHash common.Hash, l2GenesisBlockNumber uint64) (*rollup.Config, error) {
 	if d.OptimismPortalProxy == (common.Address{}) {
 		return nil, errors.New("OptimismPortalProxy cannot be address(0)")
 	}
@@ -811,7 +811,7 @@ func NewL2ImmutableConfig(config *DeployConfig) (*immutables.PredeploysImmutable
 
 // NewL2StorageConfig will create a StorageConfig given an instance of a
 // Hardhat and a DeployConfig.
-func NewL2StorageConfig(config *DeployConfig, block rsk_types.L1Block) (state.StorageConfig, error) {
+func NewL2StorageConfig(config *DeployConfig, block *types.Block) (state.StorageConfig, error) {
 	storage := make(state.StorageConfig)
 
 	if block.Number() == nil {
