@@ -289,7 +289,7 @@ func TestInvalidPayloadInSpanBatch(gt *testing.T) {
 			data := make([]byte, rand.Intn(100))
 			gas, err := core.IntrinsicGas(data, nil, false, true, true, false)
 			require.NoError(t, err)
-			baseFee := seqEng.l2Chain.CurrentBlock().BaseFee
+			baseFee := seqEng.l2Chain.CurrentBlock().BaseFee()
 			tx := types.MustSignNewTx(dp.Secrets.Alice, signer, &types.DynamicFeeTx{
 				ChainID:   sd.L2Cfg.Config.ChainID,
 				Nonce:     aliceNonce,

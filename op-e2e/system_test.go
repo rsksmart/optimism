@@ -1092,7 +1092,7 @@ func TestWithdrawals(t *testing.T) {
 
 	// Take fee into account
 	diff = new(big.Int).Sub(startBalance, endBalance)
-	fees := calcGasFees(receipt.GasUsed, tx.GasTipCap(), tx.GasFeeCap(), header.BaseFee)
+	fees := calcGasFees(receipt.GasUsed, tx.GasTipCap(), tx.GasFeeCap(), header.BaseFee())
 	fees = fees.Add(fees, receipt.L1Fee)
 	diff = diff.Sub(diff, fees)
 	require.Equal(t, withdrawAmount, diff)
@@ -1262,7 +1262,7 @@ func TestFees(t *testing.T) {
 	require.Equal(t, l2Fee, sequencerFeeVaultDiff)
 
 	// Tally BaseFee
-	baseFee := new(big.Int).Mul(header.BaseFee, new(big.Int).SetUint64(receipt.GasUsed))
+	baseFee := new(big.Int).Mul(header.BaseFee(), new(big.Int).SetUint64(receipt.GasUsed))
 	require.Equal(t, baseFee, baseFeeRecipientDiff, "base fee fee mismatch")
 
 	// Tally L1 Fee
@@ -1281,7 +1281,7 @@ func TestFees(t *testing.T) {
 	require.Equal(t, receipt.L1Fee, l1Fee, "l1 fee in receipt is correct")
 	require.Equal(t,
 		new(big.Float).Mul(
-			new(big.Float).SetInt(l1Header.BaseFee),
+			new(big.Float).SetInt(l1Header.BaseFee()),
 			new(big.Float).Mul(new(big.Float).SetInt(receipt.L1GasUsed), receipt.FeeScalar),
 		),
 		new(big.Float).SetInt(receipt.L1Fee), "fee field in receipt matches gas used times scalar times basefee")

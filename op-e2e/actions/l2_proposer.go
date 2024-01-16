@@ -100,7 +100,7 @@ func (p *L2Proposer) sendTx(t Testing, data []byte) {
 	gasTipCap := big.NewInt(2 * params.GWei)
 	pendingHeader, err := p.l1.HeaderByNumber(t.Ctx(), big.NewInt(-1))
 	require.NoError(t, err, "need l1 pending header for gas price estimation")
-	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(pendingHeader.BaseFee, big.NewInt(2)))
+	gasFeeCap := new(big.Int).Add(gasTipCap, new(big.Int).Mul(pendingHeader.BaseFee(), big.NewInt(2)))
 	chainID, err := p.l1.ChainID(t.Ctx())
 	require.NoError(t, err)
 	nonce, err := p.l1.NonceAt(t.Ctx(), p.address, nil)
