@@ -87,8 +87,6 @@ func logL1InfoTxns(l log.Logger, l2Number, l2Timestamp uint64, safeTx, unsafeTx 
 		return
 	}
 
-	// Rootstock: safeTx & unsafeTx come from ExecutionPayload that should have handled BaseFee for L1 blocks
-
 	// Then decode the ABI encoded parameters
 	var safeInfo, unsafeInfo L1BlockInfo
 	errSafe = (&safeInfo).UnmarshalBinary(safeTxValue.Data())

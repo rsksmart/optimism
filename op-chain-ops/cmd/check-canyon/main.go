@@ -23,8 +23,6 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 )
 
-// Rootstock: we are not going to use this file, we will always be after canyon
-
 func CalcBaseFee(parent eth.BlockInfo, elasticity uint64, canyonActive bool) *big.Int {
 	denomUint := uint64(50)
 	if canyonActive {

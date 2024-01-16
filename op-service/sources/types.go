@@ -67,7 +67,7 @@ func (h headerInfo) MixDigest() common.Hash {
 }
 
 func (h headerInfo) BaseFee() *big.Int {
-	return h.Header.BaseFee() // Rootstock: handled to pick minimumGasPrice at op-service/sources/types.go#createGethHeader
+	return h.Header.BaseFee()
 }
 
 func (h headerInfo) ReceiptHash() common.Hash {
@@ -175,13 +175,6 @@ func (hdr *rpcHeader) computeBlockHash() common.Hash {
 }
 
 func (hdr *rpcHeader) createGethHeader() *types.Header {
-	var baseFee *hexutil.Big
-	if hdr.isL1Block() { // TODO(iago-510) probably no longer needed
-		baseFee = hdr.RskMinimumGasPrice
-	} else {
-		baseFee = hdr.BaseFee()
-	}
-
 	return &types.Header{
 		ParentHash:      hdr.ParentHash,
 		UncleHash:       hdr.UncleHash,
@@ -198,7 +191,7 @@ func (hdr *rpcHeader) createGethHeader() *types.Header {
 		Extra:           hdr.Extra,
 		MixDigest:       hdr.MixDigest,
 		Nonce:           hdr.Nonce,
-		EthBaseFee:      (*big.Int)(baseFee),
+		EthBaseFee:      (*big.Int)(hdr.BaseFee()),
 		WithdrawalsHash: hdr.WithdrawalsRoot,
 		// Cancun
 		BlobGasUsed:      (*uint64)(hdr.BlobGasUsed),
@@ -298,18 +291,8 @@ func (block *rpcBlock) ExecutionPayload(trustCache bool) (*eth.ExecutionPayload,
 		}
 	}
 
-	// TODO(rootstock) As per our checks, this logic could be called from PrefetchingEthClient (via EthClient#PayloadXXX methods), which is L1 related
-	// that's the reason for handling the potentially missing BaseFee field here
-	// but it seems to not be used right now (by default) for the PoC at least, adding a log just to spot it otherwise
-	// (check related log on l1_client#NewL1Client func)
-
 	var baseFee uint256.Int
-	if block.isL1Block() {
-		fmt.Printf("==== Unexpected L1 block usage on ExecutionPayload ====")
-		baseFee.SetFromBig((*big.Int)(block.RskMinimumGasPrice))
-	} else {
-		baseFee.SetFromBig((*big.Int)(block.BaseFee())) // TODO(iago-510) probably not needed
-	}
+	baseFee.SetFromBig((*big.Int)(block.BaseFee()))
 
 	// Unfortunately eth_getBlockByNumber either returns full transactions, or only tx-hashes.
 	// There is no option for encoded transactions.
