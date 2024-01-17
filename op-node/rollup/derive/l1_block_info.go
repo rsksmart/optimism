@@ -150,7 +150,7 @@ func L1InfoDeposit(seqNumber uint64, block eth.BlockInfo, sysCfg eth.SystemConfi
 		BlockHash:      block.Hash(),
 		SequenceNumber: seqNumber,
 		BatcherAddr:    sysCfg.BatcherAddr,
-		// TODO(rootstock) we should probably have to tweak these config values
+		// TODO(rootstock) we will probably have to tweak these config values
 		L1FeeOverhead: sysCfg.Overhead,
 		L1FeeScalar:   sysCfg.Scalar,
 	}
