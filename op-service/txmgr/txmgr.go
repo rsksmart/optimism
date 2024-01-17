@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	// Geth requires a minimum fee bump of 10% for tx resubmission
+	// Geth requires a minimum fee bump of 10% for tx resubmission - Rootstock: same for RSKj
 	priceBump int64 = 10
 )
 
@@ -74,7 +74,7 @@ type ETHBackend interface {
 	// These functions are used to estimate what the basefee & priority fee should be set to.
 	// TODO(CLI-3318): Maybe need a generic interface to support different RPC providers
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
-	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
+	SuggestGasPrice(ctx context.Context) (*big.Int, error)
 	// NonceAt returns the account nonce of the given account.
 	// The block number can be nil, in which case the nonce is taken from the latest known block.
 	NonceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (uint64, error)
@@ -181,7 +181,7 @@ func (m *SimpleTxManager) send(ctx context.Context, candidate TxCandidate) (*typ
 		ctx, cancel = context.WithTimeout(ctx, m.cfg.TxSendTimeout)
 		defer cancel()
 	}
-	tx, err := retry.Do(ctx, 30, retry.Fixed(2*time.Second), func() (*types.Transaction, error) {
+	tx, err := retry.Do(ctx, 30, retry.Fixed(2*time.Second), func() (*rskWrappedTx, error) {
 		tx, err := m.craftTx(ctx, candidate)
 		if err != nil {
 			m.l.Warn("Failed to create a transaction, will retry", "err", err)
@@ -194,12 +194,19 @@ func (m *SimpleTxManager) send(ctx context.Context, candidate TxCandidate) (*typ
 	return m.sendTx(ctx, tx)
 }
 
+// Rootstock: convenient struct to hold gasFeeCap & gasTipCap, not present on DynamicTx, for future usage on #increaseGasPrice logic
+type rskWrappedTx struct {
+	t         *types.Transaction
+	gasFeeCap *big.Int
+	gasTipCap *big.Int
+}
+
 // craftTx creates the signed transaction
 // It queries L1 for the current fee market conditions as well as for the nonce.
 // NOTE: This method SHOULD NOT publish the resulting transaction.
 // NOTE: If the [TxCandidate.GasLimit] is non-zero, it will be used as the transaction's gas.
 // NOTE: Otherwise, the [SimpleTxManager] will query the specified backend for an estimate.
-func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*types.Transaction, error) {
+func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*rskWrappedTx, error) {
 	gasTipCap, basefee, err := m.suggestGasPriceCaps(ctx)
 	if err != nil {
 		m.metr.RPCError()
@@ -211,7 +218,7 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 		To:       candidate.To,
 		Data:     candidate.TxData,
 		Value:    candidate.Value,
-		GasPrice: big.NewInt(1),
+		GasPrice: gasTipCap,
 	}
 
 	m.l.Info("Creating tx", "to", rawTx.To, "from", m.cfg.From)
@@ -235,7 +242,12 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 		rawTx.Gas = gas
 	}
 
-	return m.signWithNextNonce(ctx, rawTx)
+	tx, err := m.signWithNextNonce(ctx, rawTx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &rskWrappedTx{tx, gasFeeCap, gasTipCap}, err
 }
 
 // signWithNextNonce returns a signed transaction with the next available nonce.
@@ -285,7 +297,7 @@ func (m *SimpleTxManager) resetNonce() {
 
 // send submits the same transaction several times with increasing gas prices as necessary.
 // It waits for the transaction to be confirmed on chain.
-func (m *SimpleTxManager) sendTx(ctx context.Context, tx *types.Transaction) (*types.Receipt, error) {
+func (m *SimpleTxManager) sendTx(ctx context.Context, tx *rskWrappedTx) (*types.Receipt, error) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	ctx, cancel := context.WithCancel(ctx)
@@ -293,13 +305,13 @@ func (m *SimpleTxManager) sendTx(ctx context.Context, tx *types.Transaction) (*t
 
 	sendState := NewSendState(m.cfg.SafeAbortNonceTooLowCount, m.cfg.TxNotInMempoolTimeout)
 	receiptChan := make(chan *types.Receipt, 1)
-	publishAndWait := func(tx *types.Transaction, bumpFees bool) *types.Transaction {
+	publishAndWait := func(tx *rskWrappedTx, bumpFees bool) *rskWrappedTx {
 		wg.Add(1)
 		tx, published := m.publishTx(ctx, tx, sendState, bumpFees)
 		if published {
 			go func() {
 				defer wg.Done()
-				m.waitForTx(ctx, tx, sendState, receiptChan)
+				m.waitForTx(ctx, tx.t, sendState, receiptChan)
 			}()
 		} else {
 			wg.Done()
@@ -341,11 +353,11 @@ func (m *SimpleTxManager) sendTx(ctx context.Context, tx *types.Transaction) (*t
 // publishTx publishes the transaction to the transaction pool. If it receives any underpriced errors
 // it will bump the fees and retry.
 // Returns the latest fee bumped tx, and a boolean indicating whether the tx was sent or not
-func (m *SimpleTxManager) publishTx(ctx context.Context, tx *types.Transaction, sendState *SendState, bumpFeesImmediately bool) (*types.Transaction, bool) {
+func (m *SimpleTxManager) publishTx(ctx context.Context, tx *rskWrappedTx, sendState *SendState, bumpFeesImmediately bool) (*rskWrappedTx, bool) {
 	updateLogFields := func(tx *types.Transaction) log.Logger {
 		return m.l.New("hash", tx.Hash(), "nonce", tx.Nonce(), "gasTipCap", tx.GasTipCap(), "gasFeeCap", tx.GasFeeCap())
 	}
-	l := updateLogFields(tx)
+	l := updateLogFields(tx.t)
 
 	l.Info("Publishing transaction")
 
@@ -359,7 +371,7 @@ func (m *SimpleTxManager) publishTx(ctx context.Context, tx *types.Transaction, 
 			}
 			tx = newTx
 			sendState.bumpCount++
-			l = updateLogFields(tx)
+			l = updateLogFields(tx.t)
 		}
 		bumpFeesImmediately = true // bump fees next loop
 
@@ -370,7 +382,7 @@ func (m *SimpleTxManager) publishTx(ctx context.Context, tx *types.Transaction, 
 		}
 
 		cCtx, cancel := context.WithTimeout(ctx, m.cfg.NetworkTimeout)
-		err := m.backend.SendTransaction(cCtx, tx)
+		err := m.backend.SendTransaction(cCtx, tx.t)
 		cancel()
 		sendState.ProcessSendError(err)
 
@@ -500,7 +512,9 @@ func (m *SimpleTxManager) queryReceipt(ctx context.Context, txHash common.Hash, 
 // rules, and no lower than the values returned by the fee suggestion algorithm to ensure it
 // doesn't linger in the mempool. Finally to avoid runaway price increases, fees are capped at a
 // `feeLimitMultiplier` multiple of the suggested values.
-func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, tx *types.Transaction) (*types.Transaction, error) {
+func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, wTx *rskWrappedTx) (*rskWrappedTx, error) {
+	tx := wTx.t
+
 	m.l.Info("bumping gas price for tx", "hash", tx.Hash(), "tip", tx.GasTipCap(), "fee", tx.GasFeeCap(), "gaslimit", tx.Gas())
 	tip, basefee, err := m.suggestGasPriceCaps(ctx)
 	if err != nil {
@@ -518,15 +532,13 @@ func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, tx *types.Transa
 	if bumpedFee.Cmp(maxFee) > 0 {
 		return nil, fmt.Errorf("bumped fee 0x%s is over %dx multiple of the suggested value", bumpedFee.Text(16), m.cfg.FeeLimitMultiplier)
 	}
-	rawTx := &types.DynamicFeeTx{
-		ChainID:    tx.ChainId(),
-		Nonce:      tx.Nonce(),
-		GasTipCap:  bumpedTip,
-		GasFeeCap:  bumpedFee,
-		To:         tx.To(),
-		Value:      tx.Value(),
-		Data:       tx.Data(),
-		AccessList: tx.AccessList(),
+
+	rawTx := &types.LegacyTx{
+		To:       tx.To(),
+		Nonce:    tx.Nonce(),
+		Data:     tx.Data(),
+		Value:    tx.Value(),
+		GasPrice: bumpedTip,
 	}
 
 	// Re-estimate gaslimit in case things have changed or a previous gaslimit estimate was wrong
@@ -555,16 +567,17 @@ func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, tx *types.Transa
 	newTx, err := m.cfg.Signer(ctx, m.cfg.From, types.NewTx(rawTx))
 	if err != nil {
 		m.l.Warn("failed to sign new transaction", "err", err)
-		return tx, nil
+		return wTx, nil
 	}
-	return newTx, nil
+
+	return &rskWrappedTx{newTx, bumpedTip, bumpedFee}, err
 }
 
 // suggestGasPriceCaps suggests what the new tip & new basefee should be based on the current L1 conditions
 func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *big.Int, error) {
 	cCtx, cancel := context.WithTimeout(ctx, m.cfg.NetworkTimeout)
 	defer cancel()
-	tip, err := m.backend.SuggestGasTipCap(cCtx)
+	tip, err := m.backend.SuggestGasPrice(cCtx)
 	if err != nil {
 		m.metr.RPCError()
 		return nil, nil, fmt.Errorf("failed to fetch the suggested gas tip cap: %w", err)
@@ -582,7 +595,6 @@ func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *b
 		return nil, nil, errors.New("txmgr does not support pre-london blocks that do not have a basefee")
 	}
 
-	// TODO(iago-510 think about these BaseFee & tip thingies)
 	return tip, head.BaseFee(), nil
 }
 
@@ -596,7 +608,7 @@ func calcThresholdValue(x *big.Int) *big.Int {
 // updateFees takes an old transaction's tip & fee cap plus a new tip & basefee, and returns
 // a suggested tip and fee cap such that:
 //
-//	(a) each satisfies geth's required tx-replacement fee bumps (we use a 10% increase), and
+//	(a) each satisfies geth's required tx-replacement fee bumps (we use a 10% increase), and - Rootstock: same for RSKj
 //	(b) gasTipCap is no less than new tip, and
 //	(c) gasFeeCap is no less than calcGasFee(newBaseFee, newTip)
 func updateFees(oldTip, oldFeeCap, newTip, newBaseFee *big.Int, lgr log.Logger) (*big.Int, *big.Int) {
