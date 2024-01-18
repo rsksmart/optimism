@@ -198,8 +198,9 @@ var Subcommands = cli.Commands{
 			if l1RPC != "" {
 				client, err := ethclient.Dial(l1RPC)
 				if err != nil {
-					return fmt.Errorf("cannot dial %s: %w for ethclient", l1RPC, err)
+					return fmt.Errorf("cannot dial %s: %w", l1RPC, err)
 				}
+
 				if config.L1StartingBlockTag == nil {
 					l1StartBlock, err = client.BlockByNumber(context.Background(), nil)
 					if err != nil {

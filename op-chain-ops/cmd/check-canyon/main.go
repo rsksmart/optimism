@@ -138,12 +138,15 @@ func Validate1559Params(ctx Args, canyonActive bool) error {
 	if err != nil {
 		return err
 	}
+
 	parent, err := ctx.Client.InfoByNumber(context.Background(), ctx.Number-1)
 	if err != nil {
 		return err
 	}
+
 	want := CalcBaseFee(parent, ctx.Elasticity, canyonActive)
 	have := block.BaseFee()
+
 	if have.Cmp(want) != 0 {
 		return fmt.Errorf("BaseFee does not match. canyonActive: %v. have: %v, want: %v", canyonActive, have, want)
 	}

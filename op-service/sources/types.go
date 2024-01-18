@@ -125,7 +125,7 @@ type rpcHeader struct {
 	Hash common.Hash `json:"hash"`
 }
 
-func (hdr *rpcHeader) isL1Block() bool {
+func (hdr *rpcHeader) isL1Block() bool { // TODO(iago-510)
 	return hdr.RskMinimumGasPrice != nil
 }
 
@@ -211,7 +211,6 @@ func (hdr *rpcHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo
 			return nil, fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, hdr.Hash)
 		}
 	}
-
 	return &headerInfo{hdr.Hash, hdr.createGethHeader()}, nil
 }
 
@@ -290,7 +289,6 @@ func (block *rpcBlock) ExecutionPayload(trustCache bool) (*eth.ExecutionPayload,
 			return nil, err
 		}
 	}
-
 	var baseFee uint256.Int
 	baseFee.SetFromBig((*big.Int)(block.BaseFee()))
 

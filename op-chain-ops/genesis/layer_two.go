@@ -2,6 +2,7 @@ package genesis
 
 import (
 	"fmt"
+
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -32,7 +33,7 @@ func BuildL2Genesis(config *DeployConfig, l1StartBlock *types.Block) (*core.Gene
 		return nil, err
 	}
 
-	immutableConfig, err := NewL2ImmutableConfig(config)
+	immutableConfig, err := NewL2ImmutableConfig(config, l1StartBlock)
 	if err != nil {
 		return nil, err
 	}
