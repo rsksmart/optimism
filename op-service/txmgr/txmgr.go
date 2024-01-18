@@ -575,6 +575,8 @@ func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, wTx *rskWrappedT
 func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *big.Int, error) {
 	cCtx, cancel := context.WithTimeout(ctx, m.cfg.NetworkTimeout)
 	defer cancel()
+	// Rootstock: eth_gasPrice in RSKj is expected to return an increased gasPrice if market is congested
+	//TODO(rootstock) check if this gasPrice is enough or we want to bump it further like Ethereum does
 	tip, err := m.backend.SuggestGasPrice(cCtx)
 	if err != nil {
 		m.metr.RPCError()

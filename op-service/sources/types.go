@@ -125,15 +125,15 @@ type rpcHeader struct {
 	Hash common.Hash `json:"hash"`
 }
 
-func (hdr *rpcHeader) isL1Block() bool { // TODO(iago-510)
+func (hdr *rpcHeader) isL1Block() bool {
 	return hdr.RskMinimumGasPrice != nil
 }
 
-func (h *rpcHeader) BaseFee() *hexutil.Big {
-	if h.isL1Block() {
-		return h.RskMinimumGasPrice
+func (hdr *rpcHeader) BaseFee() *hexutil.Big {
+	if hdr.isL1Block() {
+		return hdr.RskMinimumGasPrice
 	} else {
-		return h.EthBaseFee
+		return hdr.EthBaseFee
 	}
 }
 
