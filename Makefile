@@ -221,8 +221,8 @@ rsk-regtest-delete:
 rsk-regtest-start:
 	docker run --name rsk_regtest -d -it \
 	-p 5050:5050 -p 4444:4444 -p 4445:4445 \
-  -v $(PWD)/rskj.logback.xml:/etc/rsk/logback.xml \
-  -v $(PWD)/rskj.node.conf:/etc/rsk/node.conf \
+  -v $(PATH_OPSTACK)/rskj.logback.xml:/etc/rsk/logback.xml \
+  -v $(PATH_OPSTACK)/rskj.node.conf:/etc/rsk/node.conf \
   franciscotobar/rskj:optimism-6.1.0 --regtest --reset
 .PHONY: rsk-regtest-start
 
@@ -277,18 +277,21 @@ rsk-config:
 	./scripts/regtest/config.sh
 .PHONY: rsk-config
 
+
 # add create2 clone, deploy, etc ...
 rsk-create2:
 	[ $(PWD) != $(PATH_CONTRACTS) ] && cd $(PATH_CONTRACTS) && \
 	direnv allow && \
-	cast publish --rpc-url "$(L1_RPC_URL)" 0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222
+	if [ $$(cast codesize 0x4e59b44847b379578588920cA78FbF26c0B4956C --rpc-url $(L1_RPC_URL)) -eq 0 ]; then \
+	cast publish --rpc-url "$(L1_RPC_URL)" 0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222 \
+	; fi
 .PHONY: rsk-create2
 
 # https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#deploy-the-l1-contracts
 rsk-deploy:
 	[ $(PWD) != $(PATH_CONTRACTS) ] && cd $(PATH_CONTRACTS) && \
 	direnv allow && \
-	forge script scripts/Deploy.s.sol:Deploy -vvv --legacy --slow --sender "$(GS_ADMIN_ADDRESS)" --rpc-url "$(L1_RPC_URL)" --broadcast --private-key "$(GS_ADMIN_PRIVATE_KEY)" --with-gas-price 100000000000
+	forge script scripts/Deploy.s.sol:Deploy -vvv --legacy --slow --rpc-url "$(L1_RPC_URL)" --broadcast --private-key "$(GS_ADMIN_PRIVATE_KEY)" --with-gas-price 65164000
 .PHONY: rsk-deploy
 
 rsk-deploy-sync:

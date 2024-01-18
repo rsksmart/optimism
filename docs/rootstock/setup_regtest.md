@@ -14,6 +14,10 @@
 
 # Guide to setup local L1 and L2 development nodes
 
+### Requirements
+
+Consult the [optmism official documentation](https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#software-dependencies) for this.
+
 You will need **5 TTYs** for running the both **L1** and **L2** nodes.
 For the purpose of this guide we will assume:
 
@@ -55,9 +59,9 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
     ```
 
       > [!NOTE]
-      > These congfs shell be automated in the near future (//TODO:).
+      > These confis shall be automated in the near future (//TODO:).
 
-      - additionally, to make the use of the rsk make targets configure following env vars:
+      - additionally, to make the use of the rsk make targets configure the following env vars:
 
     ```shell
     # path to optimism
@@ -87,22 +91,22 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
     - in docker
 
     ```shell
+    cd $PATH_RSKSMART/optimism  # if not there already
     make rsk-regtest-start-log
     ```
 
     - from jar
 
-    ```shell
-    #TODO:
-    ```
+      see [rootstock developer's portal](https://dev.rootstock.io/rsk/node/install/operating-systems/java)
 
 #### TTY 2 ([start op geth](https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#start-op-geth))
 
 5. build the internal packages and run sequencer client with
 
     ```shell
+    cd $PATH_RSKSMART/optimism  # if not there already
     make rsk-build
-    make rsk-sequencer-fresh # this consists of rsk-wallets rsk-config rsk-create2 rsk-deploy rsk-deploy-sync rsk-create-genesis rsk-jwt rsk-sequencer-init rsk-sequencer-run
+    make rsk-sequencer-fresh
     ```
 
 #### TTY 3 ([start op node](https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#start-op-node))
@@ -110,6 +114,7 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 6. run consensus client
 
     ```shell
+    cd $PATH_RSKSMART/optimism  # if not there already
     make rsk-consensus-run
     ```
 
@@ -118,6 +123,7 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 7. run batcher client
 
     ```shell
+    cd $PATH_RSKSMART/optimism  # if not there already
     make rsk-batcher-run
     ```
 
@@ -126,6 +132,7 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 8. run proposer client
 
     ```shell
+    cd $PATH_RSKSMART/optimism  # if not there already
     make rsk-proposer-run
     ```
 
@@ -139,8 +146,8 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 
 deposit some RBTC using sdk
 
-```
-cd packages/sdk
+```shell
+cd $PATH_RSKSMART/optimism/packages/sdk
 npx hardhat deposit-eth --to 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 --amount 100 --network regtest --withdraw false;
 ```
 
@@ -149,6 +156,6 @@ npx hardhat deposit-eth --to 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 --amount
 
 and to verify the balance
 
-```
+```shell
 cast balance 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 --rpc-url http://localhost:8545
 ```

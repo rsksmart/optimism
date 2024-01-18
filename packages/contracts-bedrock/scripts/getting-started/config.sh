@@ -20,10 +20,9 @@ reqenv "GS_SEQUENCER_ADDRESS"
 reqenv "L1_RPC_URL"
 
 # Get the finalized block timestamp and hash
-block=$(cast block finalized --rpc-url "$L1_RPC_URL")
+block=$(cast block finalized --rpc-url $L1_RPC_URL)
 timestamp=$(echo "$block" | awk '/timestamp/ { print $2 }')
 blockhash=$(echo "$block" | awk '/hash/ { print $2 }')
-echo "$block"
 
 # Generate the config file
 config=$(cat << EOL
@@ -33,27 +32,27 @@ config=$(cat << EOL
 
   "l1StartingBlockTag": "$blockhash",
 
-  "l1ChainID": 33,
+  "l1ChainID": 11155111,
   "l2ChainID": 42069,
   "l2BlockTime": 2,
-  "l1BlockTime": 3,
+  "l1BlockTime": 12,
 
-  "maxSequencerDrift": 300,
-  "sequencerWindowSize": 200,
-  "channelTimeout": 120,
+  "maxSequencerDrift": 600,
+  "sequencerWindowSize": 3600,
+  "channelTimeout": 300,
 
   "p2pSequencerAddress": "$GS_SEQUENCER_ADDRESS",
   "batchInboxAddress": "0xff00000000000000000000000000000000042069",
   "batchSenderAddress": "$GS_BATCHER_ADDRESS",
 
-  "l2OutputOracleSubmissionInterval": 10,
+  "l2OutputOracleSubmissionInterval": 120,
   "l2OutputOracleStartingBlockNumber": 0,
   "l2OutputOracleStartingTimestamp": $timestamp,
 
   "l2OutputOracleProposer": "$GS_PROPOSER_ADDRESS",
   "l2OutputOracleChallenger": "$GS_ADMIN_ADDRESS",
 
-  "finalizationPeriodSeconds": 2,
+  "finalizationPeriodSeconds": 12,
 
   "proxyAdminOwner": "$GS_ADMIN_ADDRESS",
   "baseFeeVaultRecipient": "$GS_ADMIN_ADDRESS",
@@ -92,4 +91,4 @@ EOL
 )
 
 # Write the config file
-echo "$config" > deploy-config/getting_started.json
+echo "$config" > deploy-config/getting-started.json

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# This script is used to generate the getting-started.json configuration file
-# used in the Getting Started quickstart guide on the docs site. Avoids the
-# need to have the getting-started.json committed to the repo since it's an
+# This script is used to generate the regtest.json configuration file
+# used in the docs/rootstock/setup_regtest.md guide. Avoids the
+# need to have the regtest.json committed to the repo since it's an
 # invalid JSON file when not filled in, which is annoying.
 
 reqenv() {
