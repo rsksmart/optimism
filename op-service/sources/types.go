@@ -104,7 +104,7 @@ type rpcHeader struct {
 	Nonce       types.BlockNonce `json:"nonce"`
 
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
-	EthBaseFee *hexutil.Big `json:"baseFeePerGas,omitempty"`
+	EthBaseFee *hexutil.Big `json:"baseFeePerGas"`
 
 	// Rootstock specific
 	RskMinimumGasPrice *hexutil.Big `json:"minimumGasPrice,omitempty"`
