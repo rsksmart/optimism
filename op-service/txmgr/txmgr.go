@@ -532,7 +532,6 @@ func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, wTx *rskWrappedT
 	if bumpedFee.Cmp(maxFee) > 0 {
 		return nil, fmt.Errorf("bumped fee 0x%s is over %dx multiple of the suggested value", bumpedFee.Text(16), m.cfg.FeeLimitMultiplier)
 	}
-
 	rawTx := &types.LegacyTx{
 		To:       tx.To(),
 		Nonce:    tx.Nonce(),
@@ -569,7 +568,6 @@ func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, wTx *rskWrappedT
 		m.l.Warn("failed to sign new transaction", "err", err)
 		return wTx, nil
 	}
-
 	return &rskWrappedTx{newTx, bumpedTip, bumpedFee}, err
 }
 
@@ -584,7 +582,6 @@ func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *b
 	} else if tip == nil {
 		return nil, nil, errors.New("the suggested tip was nil")
 	}
-
 	cCtx, cancel = context.WithTimeout(ctx, m.cfg.NetworkTimeout)
 	defer cancel()
 	head, err := m.backend.HeaderByNumber(cCtx, nil)
@@ -594,7 +591,6 @@ func (m *SimpleTxManager) suggestGasPriceCaps(ctx context.Context) (*big.Int, *b
 	} else if head.BaseFee() == nil {
 		return nil, nil, errors.New("txmgr does not support pre-london blocks that do not have a basefee")
 	}
-
 	return tip, head.BaseFee(), nil
 }
 

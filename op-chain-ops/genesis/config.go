@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/core/types"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	gstate "github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -708,7 +708,7 @@ func NewStateDump(path string) (*gstate.Dump, error) {
 
 // NewL2ImmutableConfig will create an ImmutableConfig given an instance of a
 // DeployConfig and a block.
-func NewL2ImmutableConfig(config *DeployConfig) (*immutables.PredeploysImmutableConfig, error) {
+func NewL2ImmutableConfig(config *DeployConfig, block *types.Block) (*immutables.PredeploysImmutableConfig, error) {
 	if config.L1StandardBridgeProxy == (common.Address{}) {
 		return nil, fmt.Errorf("L1StandardBridgeProxy cannot be address(0): %w", ErrInvalidImmutablesConfig)
 	}
