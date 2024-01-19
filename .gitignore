@@ -50,3 +50,8 @@ __pycache__
 
 # Ignore echidna artifacts
 crytic-export
+
+#goland
+.goland_run/op-node-local.run.xml
+.goland_run/op-batcher-local.run.xml
+.goland_run/op-proposer-local.run.xml

@@ -1,0 +1,17 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="template-op-proposer-local" type="GoApplicationRunConfiguration" factoryName="Go Application" folderName="Templates">
+    <module name="optimism" />
+    <working_directory value="$PROJECT_DIR$/op-proposer" />
+    <parameters value="--poll-interval=1s --rpc.port=8560 --rollup-rpc=http://localhost:8547 --allow-non-finalized=true --l2oo-address=${L2_OUTPUT_ORACLE_PROXY_ADDRESS} --private-key=${GS_PROPOSER_PRIVATE_KEY} --l1-eth-rpc=${L1_RPC_URL}" />
+    <EXTENSION ID="com.fapiko.jetbrains.plugins.better_direnv.runconfigs.GolandRunConfigurationExtension">
+      <option name="DIRENV_ENABLED" value="true" />
+      <option name="DIRENV_TRUSTED" value="true" />
+    </EXTENSION>
+    <kind value="DIRECTORY" />
+    <package value="github.com/ethereum-optimism/optimism/op-node" />
+    <directory value="$PROJECT_DIR$/op-proposer/cmd" />
+    <filePath value="$PROJECT_DIR$" />
+    <output_directory value="$PROJECT_DIR$/op-proposer/bin" />
+    <method v="2" />
+  </configuration>
+</component>
