@@ -39,7 +39,7 @@ export PATH_CONTRACTS="$PATH_OPSTACK/packages/contracts-bedrock"
 
 # paths to clients
 export PATH_CLIENT_CONSENSUS="$PATH_OPSTACK/op-node"
-export PATH_CLIENT_SEQUENCING=
+export PATH_CLIENT_EXECUTION=
 
 ##################################################
 #               Contract Deployment              #

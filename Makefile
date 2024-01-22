@@ -313,13 +313,13 @@ rsk-create-genesis:
     --outfile.l2 genesis.json \
     --outfile.rollup rollup.json \
     --l1-rpc $(L1_RPC_URL) && \
-	cp genesis.json $(PATH_CLIENT_SEQUENCING)
+	cp genesis.json $(PATH_CLIENT_EXECUTION)
 .PHONY: rsk-create-genesis
 
 rsk-jwt:
 	[ $(PWD) != $(PATH_CLIENT_CONSENSUS) ] && cd $(PATH_CLIENT_CONSENSUS) && \
 	openssl rand -hex 32 > jwt.txt && \
-	cp jwt.txt $(PATH_CLIENT_SEQUENCING)
+	cp jwt.txt $(PATH_CLIENT_EXECUTION)
 .PHONY: rsk-jwt
 
 rsk-prepare: rsk-prepare-l1 rsk-create-genesis rsk-jwt
@@ -327,16 +327,16 @@ rsk-prepare: rsk-prepare-l1 rsk-create-genesis rsk-jwt
 .PHONY: rsk-prepare
 
 # https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#initialize-op-geth
-rsk-sequencer-init:
-	[ $(PWD) != $(PATH_CLIENT_SEQUENCING) ] && cd $(PATH_CLIENT_SEQUENCING) && \
-	if [ -d $(PATH_CLIENT_SEQUENCING)/datadir ]; then rm -rf datadir; fi && \
+rsk-execution-init:
+	[ $(PWD) != $(PATH_CLIENT_EXECUTION) ] && cd $(PATH_CLIENT_EXECUTION) && \
+	if [ -d $(PATH_CLIENT_EXECUTION)/datadir ]; then rm -rf datadir; fi && \
 	mkdir -p datadir && \
 	build/bin/geth init --datadir=datadir genesis.json
-.PHONY: rsk-sequencer-init
+.PHONY: rsk-execution-init
 
 # https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#start-op-geth
-rsk-sequencer-run:
-	[ $(PWD) != $(PATH_CLIENT_SEQUENCING) ] && cd $(PATH_CLIENT_SEQUENCING) && \
+rsk-execution-run:
+	[ $(PWD) != $(PATH_CLIENT_EXECUTION) ] && cd $(PATH_CLIENT_EXECUTION) && \
 	./build/bin/geth \
     --datadir ./datadir \
     --http \
@@ -359,11 +359,11 @@ rsk-sequencer-run:
     --authrpc.port=8551 \
     --authrpc.jwtsecret=./jwt.txt \
     --rollup.disabletxpoolgossip=true
-.PHONY: rsk-sequencer-run
+.PHONY: rsk-execution-run
 
-rsk-sequencer-fresh: rsk-prepare rsk-sequencer-init rsk-sequencer-run
+rsk-execution-fresh: rsk-prepare rsk-execution-init rsk-execution-run
 
-.PHONY: rsk-sequencer-fresh
+.PHONY: rsk-execution-fresh
 
 # https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#start-op-node
 rsk-consensus-run:

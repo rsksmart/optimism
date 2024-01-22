@@ -23,7 +23,7 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 
 #### TTY 1
 
-1. clone op-geth to serve as the sequencer client and build it
+1. clone op-geth to serve as the execution client and build it
 
     ```shell
     cd $PATH_RSKSMART  # if not there already
@@ -66,7 +66,7 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 
     # paths to clients
     export PATH_CLIENT_CONSENSUS="$PATH_OPSTACK/op-node"
-    export PATH_CLIENT_SEQUENCING="$PATH_RSKSMART/op-geth"
+    export PATH_CLIENT_EXECUTION="$PATH_RSKSMART/op-geth"
 
     # regtest 33
     export L1_CHAIN_ID=33
@@ -95,12 +95,12 @@ This is illustrative, but by all means, set it in each TTY to copy-paste from th
 
 #### TTY 2 ([start op geth](https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#start-op-geth))
 
-5. build the internal packages and run sequencer client with
+5. build the internal packages and run execution client with
 
     ```shell
     cd $PATH_RSKSMART/optimism  # if not there already
     make rsk-build
-    make rsk-sequencer-fresh
+    make rsk-execution-fresh
     ```
 
 #### TTY 3 ([start op node](https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#start-op-node))
