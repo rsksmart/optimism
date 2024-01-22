@@ -246,7 +246,7 @@ func (ic *InstrumentedClient) SuggestGasPrice(ctx context.Context) (*big.Int, er
 }
 
 func (ic *InstrumentedClient) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
-	return instrument2[*big.Int](ic.m, "eth_maxPriorityFeePerGas", func() (*big.Int, error) {
+	return instrument2[*big.Int](ic.m, "eth_gasPrice", func() (*big.Int, error) {
 		return ic.c.SuggestGasPrice(ctx)
 	})
 }

@@ -817,9 +817,9 @@ func NewL2StorageConfig(config *DeployConfig, block *types.Block) (state.Storage
 	if block.Number() == nil {
 		return storage, errors.New("block number not set")
 	}
-	if block.BaseFee() == nil {
-		return storage, errors.New("block base fee not set")
-	}
+	// if block.BaseFee() == nil {
+	// 	return storage, errors.New("block base fee not set")
+	// }
 
 	storage["L2ToL1MessagePasser"] = state.StorageValues{
 		"msgNonce": 0,
@@ -841,7 +841,7 @@ func NewL2StorageConfig(config *DeployConfig, block *types.Block) (state.Storage
 	storage["L1Block"] = state.StorageValues{
 		"number":         block.Number(),
 		"timestamp":      block.Time(),
-		"basefee":        block.BaseFee(),
+		"basefee":        big.NewInt(1), //block.BaseFee(),
 		"hash":           block.Hash(),
 		"sequenceNumber": 0,
 		"batcherHash":    eth.AddressAsLeftPaddedHash(config.BatchSenderAddress),

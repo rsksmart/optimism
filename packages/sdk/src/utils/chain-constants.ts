@@ -3,47 +3,57 @@ import { ethers } from 'ethers'
 import portalArtifactsMainnet from '@eth-optimism/contracts-bedrock/deployments/mainnet/OptimismPortalProxy.json'
 import portalArtifactsGoerli from '@eth-optimism/contracts-bedrock/deployments/goerli/OptimismPortalProxy.json'
 import portalArtifactsSepolia from '@eth-optimism/contracts-bedrock/deployments/sepolia/OptimismPortalProxy.json'
+import portalArtifactsRegtest from '@eth-optimism/contracts-bedrock/deployments/regtest/OptimismPortalProxy.json'
 import l2OutputOracleArtifactsMainnet from '@eth-optimism/contracts-bedrock/deployments/mainnet/L2OutputOracleProxy.json'
 import l2OutputOracleArtifactsGoerli from '@eth-optimism/contracts-bedrock/deployments/goerli/L2OutputOracleProxy.json'
 import l2OutputOracleArtifactsSepolia from '@eth-optimism/contracts-bedrock/deployments/sepolia/L2OutputOracleProxy.json'
+import l2OutputOracleArtifactsRegtest from '@eth-optimism/contracts-bedrock/deployments/regtest/L2OutputOracleProxy.json'
 import addressManagerArtifactMainnet from '@eth-optimism/contracts-bedrock/deployments/mainnet/AddressManager.json'
 import addressManagerArtifactGoerli from '@eth-optimism/contracts-bedrock/deployments/goerli/AddressManager.json'
 import addressManagerArtifactSepolia from '@eth-optimism/contracts-bedrock/deployments/sepolia/AddressManager.json'
+import addressManagerArtifactRegtest from '@eth-optimism/contracts-bedrock/deployments/regtest/AddressManager.json'
 import l1StandardBridgeArtifactMainnet from '@eth-optimism/contracts-bedrock/deployments/mainnet/L1StandardBridgeProxy.json'
 import l1StandardBridgeArtifactGoerli from '@eth-optimism/contracts-bedrock/deployments/goerli/L1StandardBridgeProxy.json'
 import l1StandardBridgeArtifactSepolia from '@eth-optimism/contracts-bedrock/deployments/sepolia/L1StandardBridgeProxy.json'
+import l1StandardBridgeArtifactRegtest from '@eth-optimism/contracts-bedrock/deployments/regtest/L1StandardBridgeProxy.json'
 import l1CrossDomainMessengerArtifactMainnet from '@eth-optimism/contracts-bedrock/deployments/mainnet/L1CrossDomainMessengerProxy.json'
 import l1CrossDomainMessengerArtifactGoerli from '@eth-optimism/contracts-bedrock/deployments/goerli/L1CrossDomainMessengerProxy.json'
 import l1CrossDomainMessengerArtifactSepolia from '@eth-optimism/contracts-bedrock/deployments/sepolia/L1CrossDomainMessengerProxy.json'
+import l1CrossDomainMessengerArtifactRegtest from '@eth-optimism/contracts-bedrock/deployments/regtest/L1CrossDomainMessengerProxy.json'
 
 const portalAddresses = {
   mainnet: portalArtifactsMainnet.address,
   goerli: portalArtifactsGoerli.address,
   sepolia: portalArtifactsSepolia.address,
+  regtest: portalArtifactsRegtest.address
 }
 
 const l2OutputOracleAddresses = {
   mainnet: l2OutputOracleArtifactsMainnet.address,
   goerli: l2OutputOracleArtifactsGoerli.address,
   sepolia: l2OutputOracleArtifactsSepolia.address,
+  regtest: l2OutputOracleArtifactsRegtest.address
 }
 
 const addressManagerAddresses = {
   mainnet: addressManagerArtifactMainnet.address,
   goerli: addressManagerArtifactGoerli.address,
   sepolia: addressManagerArtifactSepolia.address,
+  regtest: addressManagerArtifactRegtest.address
 }
 
 const l1StandardBridgeAddresses = {
   mainnet: l1StandardBridgeArtifactMainnet.address,
   goerli: l1StandardBridgeArtifactGoerli.address,
   sepolia: l1StandardBridgeArtifactSepolia.address,
+  regtest: l1StandardBridgeArtifactRegtest.address
 }
 
 const l1CrossDomainMessengerAddresses = {
   mainnet: l1CrossDomainMessengerArtifactMainnet.address,
   goerli: l1CrossDomainMessengerArtifactGoerli.address,
   sepolia: l1CrossDomainMessengerArtifactSepolia.address,
+  regtest: l1CrossDomainMessengerArtifactRegtest.address
 }
 
 // legacy
@@ -51,6 +61,7 @@ const stateCommitmentChainAddresses = {
   mainnet: '0xBe5dAb4A2e9cd0F27300dB4aB94BeE3A233AEB19',
   goerli: '0x9c945aC97Baf48cB784AbBB61399beB71aF7A378',
   sepolia: ethers.constants.AddressZero,
+  regtest: ethers.constants.AddressZero,
 }
 
 // legacy
@@ -58,6 +69,7 @@ const canonicalTransactionChainAddresses = {
   mainnet: '0x5E4e65926BA27467555EB562121fac00D24E9dD2',
   goerli: '0x607F755149cFEB3a14E1Dc3A4E2450Cde7dfb04D',
   sepolia: ethers.constants.AddressZero,
+  regtest: ethers.constants.AddressZero,
 }
 
 import {
@@ -88,6 +100,7 @@ export const DEPOSIT_CONFIRMATION_BLOCKS: {
   [L2ChainID.BASE_MAINNET]: 10 as const,
   [L2ChainID.ZORA_GOERLI]: 12 as const,
   [L2ChainID.ZORA_MAINNET]: 50 as const,
+  [L2ChainID.OPTIMISM_REGTEST]: 2 as const,
 }
 
 export const CHAIN_BLOCK_TIMES: {
@@ -98,6 +111,7 @@ export const CHAIN_BLOCK_TIMES: {
   [L1ChainID.SEPOLIA]: 15 as const,
   [L1ChainID.HARDHAT_LOCAL]: 1 as const,
   [L1ChainID.BEDROCK_LOCAL_DEVNET]: 15 as const,
+  [L1ChainID.REGTEST]: 3 as const,
 }
 
 /**
@@ -284,6 +298,10 @@ export const CONTRACT_ADDRESSES: {
       OptimismPortal: '0x1a0ad011913A150f69f6A19DF447A0CfD9551054' as const,
       L2OutputOracle: '0x9E6204F750cD866b299594e2aC9eA824E2e5f95c' as const,
     },
+    l2: DEFAULT_L2_CONTRACT_ADDRESSES,
+  },
+  [L2ChainID.OPTIMISM_REGTEST]: {
+    l1: getL1ContractsByNetworkName('regtest'),
     l2: DEFAULT_L2_CONTRACT_ADDRESSES,
   },
 }

@@ -1,9 +1,8 @@
+
 <div align="center">
-  <br />
-  <br />
   <a href="https://optimism.io"><img alt="Optimism" src="https://raw.githubusercontent.com/ethereum-optimism/brand-kit/main/assets/svg/OPTIMISM-R.svg" width=600></a>
   <br />
-  <h3><a href="https://optimism.io">Optimism</a> is Ethereum, scaled.</h3>
+  <h3><a href="https://optimism.io">Optimism</a> is <del>Ethereum</del> <ins>Rootstock</ins>, scaled.</h3>
   <br />
 </div>
 
@@ -48,6 +47,8 @@ Refer to the Directory Structure section below to understand which packages are 
 
 <pre>
 ├── <a href="./docs">docs</a>: A collection of documents including audits and post-mortems
+│   ├── <a href="./docs/rootstock">rootstock</a>: Rootstock sepcific documents and guides
+│   |   └── <a href="./docs/rootstock/setup_regtest.md">setup_regtest</a>: Guide to setup local L1 and L2 development nodes
 ├── <a href="./op-bindings">op-bindings</a>: Go bindings for Bedrock smart contracts.
 ├── <a href="./op-batcher">op-batcher</a>: L2-Batch Submitter, submits bundles of batches to L1
 ├── <a href="./op-bootnode">op-bootnode</a>: Standalone op-node discovery bootnode
@@ -72,6 +73,7 @@ Refer to the Directory Structure section below to understand which packages are 
 │   └── <a href="./packages/sdk">sdk</a>: provides a set of tools for interacting with Optimism
 ├── <a href="./proxyd">proxyd</a>: Configurable RPC request router and proxy
 └── <a href="./specs">specs</a>: Specs of the rollup starting at the Bedrock upgrade
+    └── <a href="./specs/rootstock">rootstock</a>: Documentation of changes and specs related to the rootstock port
 </pre>
 
 ## Branching Model
@@ -80,8 +82,8 @@ Refer to the Directory Structure section below to understand which packages are 
 
 | Branch          | Status                                                                           |
 | --------------- | -------------------------------------------------------------------------------- |
-| [master](https://github.com/ethereum-optimism/optimism/tree/master/)                   | Accepts PRs from `develop` when intending to deploy to production.                  |
-| [develop](https://github.com/ethereum-optimism/optimism/tree/develop/)                 | Accepts PRs that are compatible with `master` OR from `release/X.X.X` branches.                    |
+| [master](https://github.com/rsksmart/optimism/tree/master/)                   | Accepts PRs from `develop` when intending to deploy to production.                  |
+| [develop](https://github.com/rsksmart/optimism/tree/develop/)                 | Accepts PRs that are compatible with `master` OR from `release/X.X.X` branches.                    |
 | release/X.X.X                                                                          | Accepts PRs for all changes, particularly those not backwards compatible with `develop` and `master`. |
 
 ### Overview

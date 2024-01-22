@@ -28,11 +28,26 @@ export GS_SEQUENCER_PRIVATE_KEY=
 export L1_RPC_KIND=
 
 ##################################################
+#               navigation                       #
+##################################################
+
+# path to optimism
+export PATH_OPSTACK=
+
+# path to bedrock contracts
+export PATH_CONTRACTS="$PATH_OPSTACK/packages/contracts-bedrock"
+
+# paths to clients
+export PATH_CLIENT_CONSENSUS="$PATH_OPSTACK/op-node"
+export PATH_CLIENT_EXECUTION=
+
+##################################################
 #               Contract Deployment              #
 ##################################################
 
 # RPC URL for the L1 network to interact with
 export L1_RPC_URL=
+export L1_CHAIN_ID=
 
 # Salt used via CREATE2 to determine implementation addresses
 # NOTE: If you want to deploy contracts from scratch you MUST reload this
