@@ -18,6 +18,7 @@ artifacts
 cache
 
 packages/contracts-bedrock/deployments/devnetL1
+packages/contracts-bedrock/deployments/regtest
 packages/contracts-bedrock/deployments/anvil
 
 # vim
