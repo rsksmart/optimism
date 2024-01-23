@@ -55,3 +55,5 @@ crytic-export
 .goland_run/op-node-local.run.xml
 .goland_run/op-batcher-local.run.xml
 .goland_run/op-proposer-local.run.xml
+# vscode
+!.vscode

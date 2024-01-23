@@ -11,6 +11,9 @@ LDFLAGS := -ldflags "$(LDFLAGSSTRING)"
 op-node:
 	env GO111MODULE=on GOOS=$(TARGETOS) GOARCH=$(TARGETARCH) go build -v $(LDFLAGS) -o ./bin/op-node ./cmd/main.go
 
+op-node-debug-mode:
+	env GO111MODULE=on GOOS=$(TARGETOS) GOARCH=$(TARGETARCH) go build -gcflags=all="-N -l" -v $(LDFLAGS) -o ./bin/op-node ./cmd/main.go
+
 clean:
 	rm bin/op-node
 
