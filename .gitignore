@@ -52,8 +52,7 @@ __pycache__
 crytic-export
 
 #goland
-.goland_run/op-node-local.run.xml
-.goland_run/op-batcher-local.run.xml
-.goland_run/op-proposer-local.run.xml
-# vscode
-!.vscode
+.debug/op-node-local.run.xml
+.debug/op-batcher-local.run.xml
+.debug/op-proposer-local.run.xml
+
