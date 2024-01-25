@@ -194,7 +194,7 @@ func (m *SimpleTxManager) send(ctx context.Context, candidate TxCandidate) (*typ
 	return m.sendTx(ctx, tx)
 }
 
-// Rootstock: convenient struct to hold gasFeeCap & gasTipCap, not present on DynamicTx, for future usage on #increaseGasPrice logic
+// Rootstock: convenient struct to hold gasFeeCap & gasTipCap, not present on LegacyTx, for future usage on #increaseGasPrice logic
 type rskWrappedTx struct {
 	t         *types.Transaction
 	gasFeeCap *big.Int
