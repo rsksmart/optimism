@@ -168,13 +168,13 @@ func createOracleEngine(t *testing.T) (*OracleEngine, *stubEngineBackend) {
 
 func createL2Block(t *testing.T, number int) *types.Block {
 	tx, err := derive.L1InfoDeposit(uint64(1), eth.HeaderBlockInfo(&types.Header{
-		Number:  big.NewInt(32),
-		BaseFee: big.NewInt(7),
+		Number:     big.NewInt(32),
+		EthBaseFee: big.NewInt(7),
 	}), eth.SystemConfig{}, true)
 	require.NoError(t, err)
 	header := &types.Header{
-		Number:  big.NewInt(int64(number)),
-		BaseFee: big.NewInt(7),
+		Number:     big.NewInt(int64(number)),
+		EthBaseFee: big.NewInt(7),
 	}
 	return types.NewBlock(header, []*types.Transaction{types.NewTx(tx)}, nil, nil, trie.NewStackTrie(nil))
 }

@@ -140,7 +140,7 @@ func newMiniL2Block(numTx int) *types.Block {
 // If numTx > 0, that many empty DynamicFeeTxs will be added to the txs.
 func newMiniL2BlockWithNumberParent(numTx int, number *big.Int, parent common.Hash) *types.Block {
 	l1Block := types.NewBlock(&types.Header{
-		BaseFee:    big.NewInt(10),
+		EthBaseFee: big.NewInt(10),
 		Difficulty: common.Big0,
 		Number:     big.NewInt(100),
 	}, nil, nil, nil, trie.NewStackTrie(nil))
