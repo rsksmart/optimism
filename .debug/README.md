@@ -32,7 +32,8 @@ For each template:
   mkdir .vscode
   cp .debug/template_launch.json .vscode/launch.json
 ```
+3. Edit the file and replace the environment variables by the actual value (hardcode it). Example: `--l1=${L1_RPC_URL}` to `--l1=http://localhost:4444`.
 
-3. The target go project for debugging has to be built with GC flag `-gcflags=all="-N -l"`
+4. The target go project for debugging has to be built with GC flag `-gcflags=all="-N -l"`
     - run `make rsk-build-debug-mode` instead of `make rsk-build` in the setup process to use these flags on op-node, op-batcher and op-proposer
-4. Ready to debug!
+5. Ready to debug!
