@@ -195,6 +195,20 @@ install-geth:
 	echo "Installed geth!"; true)
 .PHONY: install-geth
 
+### Debug mode ###
+
+op-node-debug-mode:
+	make -C ./op-node op-node-debug-mode
+.PHONY: op-node
+
+op-batcher-debug-mode:
+	make -C ./op-batcher op-batcher-debug-mode
+.PHONY: op-batcher
+
+op-proposer-debug-mode:
+	make -C ./op-proposer op-proposer-debug-mode
+.PHONY: op-proposer
+
 ### Rootstock ###
 
 rsk-regtest-log:
@@ -246,6 +260,11 @@ rsk-regtest-restart-log: rsk-regtest-restart take-5 rsk-regtest-log
 rsk-build:
 	pnpm i &&  make op-node op-batcher op-proposer && pnpm build --skipNxCache
 .PHONY: rsk-build
+
+# https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#build-the-optimism-monorepo
+rsk-build-debug-mode:
+	pnpm i &&  make op-node-debug-mode op-batcher-debug-mode op-proposer-debug-mode && pnpm build --skipNxCache
+.PHONY: rsk-build-debug-mode
 
 # https://docs.optimism.io/builders/chain-operators/tutorials/create-l2-rollup#fill-out-environment-variables
 rsk-env:

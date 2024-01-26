@@ -10,6 +10,9 @@ LDFLAGS := -ldflags "$(LDFLAGSSTRING)"
 op-batcher:
 	env GO111MODULE=on GOOS=$(TARGETOS) GOARCH=$(TARGETARCH) go build -v $(LDFLAGS) -o ./bin/op-batcher ./cmd
 
+op-batcher-debug-mode:
+	env GO111MODULE=on GOOS=$(TARGETOS) GOARCH=$(TARGETARCH) go build -gcflags=all="-N -l" -v $(LDFLAGS) -o ./bin/op-batcher ./cmd
+
 clean:
 	rm bin/op-batcher
 
