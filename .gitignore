@@ -51,8 +51,10 @@ __pycache__
 # Ignore echidna artifacts
 crytic-export
 
-#goland
+# goland
 .debug/op-node-local.run.xml
 .debug/op-batcher-local.run.xml
 .debug/op-proposer-local.run.xml
 
+# vs-code
+.vscode/launch.json
