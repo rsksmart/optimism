@@ -21,18 +21,20 @@ services:
     image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-stack-go:devnet
     entrypoint: ["echo", "build complete"]
 
-  # l1:
-  #   image: franciscotobar/rskj:optimism-6.1.0
-  #   ports:
-  #     - "4444:8545"
-  #     - "4445:8546"
-  #     - "5050:6060"
-  #   volumes:
-  #     - "l1_data:/db"
-  #     - "${PWD}/../.devnet/genesis-l1.json:/genesis.json"
-  #     - "${PWD}/test-jwt-secret.txt:/config/test-jwt-secret.txt"
-  #   environment:
-  #     GETH_MINER_RECOMMIT: 100ms
+  l1:
+    build:
+      context: .
+      dockerfile: Dockerfile.l1
+    ports:
+      - "8545:4444"
+      - "8546:4445"
+      - "6060:5050"
+    volumes:
+      - "l1_data:/db"
+      - "${PWD}/../.devnet/genesis-l1.json:/var/lib/rsk/rsk-dev.json"
+      - "${PWD}/test-jwt-secret.txt:/config/test-jwt-secret.txt"
+    environment:
+      GETH_MINER_RECOMMIT: 100ms
 
   l2:
     build:

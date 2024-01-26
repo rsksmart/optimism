@@ -130,7 +130,8 @@ def deploy_contracts(paths):
     run_command([
         'cast', 'send', '--from', account,
         '--rpc-url', 'http://127.0.0.1:8545',
-        '--unlocked', '--value', '1ether', '0x3fAB184622Dc19b6109349B94811493BF2a45362'
+        '--unlocked', '--value', '1ether', '0x3fAB184622Dc19b6109349B94811493BF2a45362',
+        '--legacy'
     ], env={}, cwd=paths.contracts_bedrock_dir)
 
     # deploy the create2 deployer
@@ -141,7 +142,7 @@ def deploy_contracts(paths):
 
     fqn = 'scripts/Deploy.s.sol:Deploy'
     run_command([
-        'forge', 'script', fqn, '--sender', account,
+        'forge', 'script', fqn, '-vvv', '--legacy', '--slow', '--sender', account,
         '--rpc-url', 'http://127.0.0.1:8545', '--broadcast',
         '--unlocked'
     ], env={}, cwd=paths.contracts_bedrock_dir)
@@ -150,7 +151,7 @@ def deploy_contracts(paths):
 
     log.info('Syncing contracts.')
     run_command([
-        'forge', 'script', fqn, '--sig', 'sync()',
+        'forge', 'script', fqn, '-vvv', '--legacy', '--sig', 'sync()',
         '--rpc-url', 'http://127.0.0.1:8545'
     ], env={}, cwd=paths.contracts_bedrock_dir)
 
@@ -160,15 +161,22 @@ def init_devnet_l1_deploy_config(paths, update_timestamp=False):
         deploy_config['l1GenesisBlockTimestamp'] = '{:#x}'.format(int(time.time()))
     write_json(paths.devnet_config_path, deploy_config)
 
-def devnet_l1_genesis(paths):
-    log.info('Generating L1 genesis state')
-    init_devnet_l1_deploy_config(paths)
+def devnet_l1_genesis(paths: Bunch):
+    log.info('Copying L1 genesis file')
+    shutil.copy(pjoin(paths.ops_bedrock_dir, 'rskj.genesis.json'), paths.genesis_l1_path)
 
-    geth = subprocess.Popen([
-        'geth', '--dev', '--http', '--http.api', 'eth,debug',
-        '--verbosity', '4', '--gcmode', 'archive', '--dev.gaslimit', '30000000',
-        '--rpc.allow-unprotected-txs'
-    ])
+    # log.info('Generating L1 genesis state')
+    # init_devnet_l1_deploy_config(paths)
+
+    # geth = subprocess.Popen([
+    #     'geth', '--dev', '--http', '--http.api', 'eth,debug',
+    #     '--verbosity', '4', '--gcmode', 'archive', '--dev.gaslimit', '30000000',
+    #     '--rpc.allow-unprotected-txs'
+    # ])
+
+    run_command([
+        'make', 'rsk-regtest-start'
+    ], cwd=paths.mono_repo_dir)
 
     try:
         forge = ChildProcess(deploy_contracts, paths)
@@ -184,7 +192,12 @@ def devnet_l1_genesis(paths):
 
         write_json(paths.allocs_path, allocs)
     finally:
-        geth.terminate()
+        run_command([
+            'make', 'rsk-regtest-stop'
+        ], cwd=paths.mono_repo_dir)
+        run_command([
+            'make', 'rsk-regtest-delete'
+        ], cwd=paths.mono_repo_dir)
 
 
 # Bring up the devnet where the contracts are deployed to L1

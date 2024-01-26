@@ -1,9 +1,12 @@
-FROM ethereum/client-go:v1.13.5
+FROM franciscotobar/rskj:optimism-6.1.0
 
-RUN apk add --no-cache jq
-
-COPY entrypoint-l1.sh /entrypoint.sh
+# COPY rskj.logback.xml /etc/rsk/logback.xml
+# COPY rskj.node.conf /etc/rsk/node.conf
+# COPY rskj.genesis.json /var/lib/rsk/rsk-dev.json
+# COPY ./entrypoint-l1.sh /entrypoint.sh
 
 VOLUME ["/db"]
 
-ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
+CMD ["--regtest", "--reset"]
+
+# ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
