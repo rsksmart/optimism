@@ -73,7 +73,7 @@ contract Deploy is Deployer {
     /// @notice Modifier that will only allow a function to be called on devnet.
     modifier onlyDevnet() {
         uint256 chainid = block.chainid;
-        if (chainid == Chains.LocalDevnet || chainid == Chains.GethDevnet) {
+        if (chainid == Chains.LocalDevnet || chainid == Chains.GethDevnet || chainid == Chains.RootstockRegtest) {
             _;
         }
     }
@@ -84,7 +84,7 @@ contract Deploy is Deployer {
         uint256 chainid = block.chainid;
         if (
             chainid == Chains.Goerli || chainid == Chains.Sepolia || chainid == Chains.LocalDevnet
-                || chainid == Chains.GethDevnet
+                || chainid == Chains.GethDevnet || chainid == Chains.RootstockRegtest
         ) {
             _;
         }
@@ -992,7 +992,7 @@ contract Deploy is Deployer {
     /// @notice Loads the mips absolute prestate from the prestate-proof for devnets otherwise
     ///         from the config.
     function loadMipsAbsolutePrestate() internal returns (Claim mipsAbsolutePrestate_) {
-        if (block.chainid == Chains.LocalDevnet || block.chainid == Chains.GethDevnet) {
+        if (block.chainid == Chains.LocalDevnet || block.chainid == Chains.GethDevnet || block.chainid == Chains.RootstockRegtest) {
             // Fetch the absolute prestate dump
             string memory filePath = string.concat(vm.projectRoot(), "/../../op-program/bin/prestate-proof.json");
             string[] memory commands = new string[](3);

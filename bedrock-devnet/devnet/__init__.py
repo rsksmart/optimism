@@ -56,12 +56,12 @@ def main():
     monorepo_dir = os.path.abspath(args.monorepo_dir)
     devnet_dir = pjoin(monorepo_dir, '.devnet')
     contracts_bedrock_dir = pjoin(monorepo_dir, 'packages', 'contracts-bedrock')
-    deployment_dir = pjoin(contracts_bedrock_dir, 'deployments', 'devnetL1')
+    deployment_dir = pjoin(contracts_bedrock_dir, 'deployments', 'regtest')
     op_node_dir = pjoin(args.monorepo_dir, 'op-node')
     ops_bedrock_dir = pjoin(monorepo_dir, 'ops-bedrock')
     deploy_config_dir = pjoin(contracts_bedrock_dir, 'deploy-config')
-    devnet_config_path = pjoin(deploy_config_dir, 'devnetL1.json')
-    devnet_config_template_path = pjoin(deploy_config_dir, 'devnetL1-template.json')
+    devnet_config_path = pjoin(deploy_config_dir, 'regtest.json')
+    devnet_config_template_path = pjoin(deploy_config_dir, 'regtest-template.json')
     ops_chain_ops = pjoin(monorepo_dir, 'op-chain-ops')
     sdk_dir = pjoin(monorepo_dir, 'packages', 'sdk')
 
@@ -209,7 +209,7 @@ def devnet_deploy(paths):
         if os.path.exists(paths.allocs_path) == False:
             devnet_l1_genesis(paths)
 
-        # It's odd that we want to regenerate the devnetL1.json file with
+        # It's odd that we want to regenerate the regtest.json file with
         # an updated timestamp different than the one used in the devnet_l1_genesis
         # function.  But, without it, CI flakes on this test rather consistently.
         # If someone reads this comment and understands why this is being done, please
@@ -333,11 +333,11 @@ def devnet_test(paths):
     # And do not use devnet system addresses, to avoid breaking fee-estimation or nonce values.
     run_commands([
         CommandPreset('erc20-test',
-          ['npx', 'hardhat',  'deposit-erc20', '--network',  'devnetL1',
+          ['npx', 'hardhat',  'deposit-erc20', '--network',  'regtest',
            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '14'],
           cwd=paths.sdk_dir, timeout=8*60),
         CommandPreset('eth-test',
-          ['npx', 'hardhat',  'deposit-eth', '--network',  'devnetL1',
+          ['npx', 'hardhat',  'deposit-eth', '--network',  'regtest',
            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '15'],
           cwd=paths.sdk_dir, timeout=8*60)
     ], max_workers=2)
