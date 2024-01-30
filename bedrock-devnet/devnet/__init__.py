@@ -162,21 +162,12 @@ def init_devnet_l1_deploy_config(paths, update_timestamp=False):
     write_json(paths.devnet_config_path, deploy_config)
 
 def devnet_l1_genesis(paths: Bunch):
-    log.info('Copying L1 genesis file')
-    shutil.copy(pjoin(paths.ops_bedrock_dir, 'rskj.genesis.json'), paths.genesis_l1_path)
+    log.info('Generating L1 genesis state')
+    init_devnet_l1_deploy_config(paths)
 
-    # log.info('Generating L1 genesis state')
-    # init_devnet_l1_deploy_config(paths)
-
-    # geth = subprocess.Popen([
-    #     'geth', '--dev', '--http', '--http.api', 'eth,debug',
-    #     '--verbosity', '4', '--gcmode', 'archive', '--dev.gaslimit', '30000000',
-    #     '--rpc.allow-unprotected-txs'
-    # ])
-
-    run_command([
-        'make', 'rsk-regtest-start'
-    ], cwd=paths.mono_repo_dir)
+    run_command(['docker', 'compose', 'up', '-d', 'l1_deployer'], cwd=paths.ops_bedrock_dir, env={
+        'PWD': paths.ops_bedrock_dir
+    })
 
     try:
         forge = ChildProcess(deploy_contracts, paths)
@@ -186,6 +177,7 @@ def devnet_l1_genesis(paths: Bunch):
         if err:
             raise Exception(f"Exception occurred in child process: {err}")
 
+        # we will not likely need these as rsk cannot dump block in the same way as to reconstruct genesis from it. Keeping it here for now though, in case it's used elsewhere
         res = debug_dumpBlock('127.0.0.1:8545')
         response = json.loads(res)
         allocs = response['result']
@@ -193,10 +185,10 @@ def devnet_l1_genesis(paths: Bunch):
         write_json(paths.allocs_path, allocs)
     finally:
         run_command([
-            'make', 'rsk-regtest-stop'
+            'docker', 'stop', 'l1_deployer'
         ], cwd=paths.mono_repo_dir)
         run_command([
-            'make', 'rsk-regtest-delete'
+            'docker', 'rm', 'l1_deployer'
         ], cwd=paths.mono_repo_dir)
 
 
@@ -215,13 +207,6 @@ def devnet_deploy(paths):
         # If someone reads this comment and understands why this is being done, please
         # update this comment to explain.
         init_devnet_l1_deploy_config(paths, update_timestamp=True)
-        run_command([
-            'go', 'run', 'cmd/main.go', 'genesis', 'l1',
-            '--deploy-config', paths.devnet_config_path,
-            '--l1-allocs', paths.allocs_path,
-            '--l1-deployments', paths.addresses_json_path,
-            '--outfile.l1', paths.genesis_l1_path,
-        ], cwd=paths.op_node_dir)
 
     log.info('Starting L1.')
     run_command(['docker', 'compose', 'up', '-d', 'l1'], cwd=paths.ops_bedrock_dir, env={
@@ -289,7 +274,7 @@ def debug_dumpBlock(url):
     log.info(f'Fetch debug_dumpBlock {url}')
     conn = http.client.HTTPConnection(url)
     headers = {'Content-type': 'application/json'}
-    body = '{"id":3, "jsonrpc":"2.0", "method": "debug_dumpBlock", "params":["latest"]}'
+    body = '{"id":3, "jsonrpc":"2.0", "method": "eth_getBlockByNumber", "params":["latest", true]}'
     conn.request('POST', '/', body, headers)
     response = conn.getresponse()
     data = response.read().decode()
