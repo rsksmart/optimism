@@ -290,7 +290,7 @@ func TestTxMgrConfirmAtMinGasPrice(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	receipt, err := h.mgr.sendTx(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Nil(t, err)
 	require.NotNil(t, receipt)
 	require.Equal(t, gasPricer.expGasFeeCap().Uint64(), receipt.GasUsed)
@@ -318,7 +318,7 @@ func TestTxMgrNeverConfirmCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	receipt, err := h.mgr.sendTx(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Equal(t, err, context.DeadlineExceeded)
 	require.Nil(t, receipt)
 }
@@ -347,7 +347,7 @@ func TestTxMgrConfirmsAtHigherGasPrice(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	receipt, err := h.mgr.sendTx(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Nil(t, err)
 	require.NotNil(t, receipt)
 	require.Equal(t, h.gasPricer.expGasFeeCap().Uint64(), receipt.GasUsed)
@@ -378,7 +378,7 @@ func TestTxMgrBlocksOnFailingRpcCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	receipt, err := h.mgr.sendTx(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Equal(t, err, context.DeadlineExceeded)
 	require.Nil(t, receipt)
 }
@@ -396,14 +396,14 @@ func TestTxMgr_CraftTx(t *testing.T) {
 	require.NotNil(t, tx)
 
 	// Validate the gas tip cap and fee cap.
-	require.Equal(t, gasTipCap, tx.t.GasTipCap())
-	require.Equal(t, gasFeeCap, tx.t.GasFeeCap())
+	require.Equal(t, gasTipCap, tx.GasTipCap())
+	require.Equal(t, gasFeeCap, tx.GasFeeCap())
 
 	// Validate the nonce was set correctly using the backend.
-	require.Zero(t, tx.t.Nonce())
+	require.Zero(t, tx.Nonce())
 
 	// Check that the gas was set using the gas limit.
-	require.Equal(t, candidate.GasLimit, tx.t.Gas())
+	require.Equal(t, candidate.GasLimit, tx.Gas())
 }
 
 // TestTxMgr_EstimateGas ensures that the tx manager will estimate
@@ -425,7 +425,7 @@ func TestTxMgr_EstimateGas(t *testing.T) {
 	require.NotNil(t, tx)
 
 	// Check that the gas was estimated correctly.
-	require.Equal(t, gasEstimate, tx.t.Gas())
+	require.Equal(t, gasEstimate, tx.Gas())
 }
 
 func TestTxMgr_EstimateGasFails(t *testing.T) {
@@ -439,7 +439,7 @@ func TestTxMgr_EstimateGasFails(t *testing.T) {
 	// Craft a successful transaction.
 	tx, err := h.mgr.craftTx(context.Background(), candidate)
 	require.Nil(t, err)
-	lastNonce := tx.t.Nonce()
+	lastNonce := tx.Nonce()
 
 	// Mock gas estimation failure.
 	h.gasPricer.err = fmt.Errorf("execution error")
@@ -450,7 +450,7 @@ func TestTxMgr_EstimateGasFails(t *testing.T) {
 	h.gasPricer.err = nil
 	tx, err = h.mgr.craftTx(context.Background(), candidate)
 	require.Nil(t, err)
-	require.Equal(t, lastNonce+1, tx.t.Nonce())
+	require.Equal(t, lastNonce+1, tx.Nonce())
 }
 
 func TestTxMgr_SigningFails(t *testing.T) {
@@ -473,7 +473,7 @@ func TestTxMgr_SigningFails(t *testing.T) {
 	// Craft a successful transaction.
 	tx, err := h.mgr.craftTx(context.Background(), candidate)
 	require.Nil(t, err)
-	lastNonce := tx.t.Nonce()
+	lastNonce := tx.Nonce()
 
 	// Mock signer failure.
 	errorSigning = true
@@ -484,7 +484,7 @@ func TestTxMgr_SigningFails(t *testing.T) {
 	errorSigning = false
 	tx, err = h.mgr.craftTx(context.Background(), candidate)
 	require.Nil(t, err)
-	require.Equal(t, lastNonce+1, tx.t.Nonce())
+	require.Equal(t, lastNonce+1, tx.Nonce())
 }
 
 // TestTxMgrOnlyOnePublicationSucceeds asserts that the tx manager will return a
@@ -515,7 +515,7 @@ func TestTxMgrOnlyOnePublicationSucceeds(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	receipt, err := h.mgr.sendTx(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Nil(t, err)
 
 	require.NotNil(t, receipt)
@@ -550,7 +550,7 @@ func TestTxMgrConfirmsMinGasPriceAfterBumping(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	receipt, err := h.mgr.sendTx(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Nil(t, err)
 	require.NotNil(t, receipt)
 	require.Equal(t, h.gasPricer.expGasFeeCap().Uint64(), receipt.GasUsed)
@@ -595,7 +595,7 @@ func TestTxMgrDoesntAbortNonceTooLowAfterMiningTx(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	receipt, err := h.mgr.sendTx(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Nil(t, err)
 	require.NotNil(t, receipt)
 	require.Equal(t, h.gasPricer.expGasFeeCap().Uint64(), receipt.GasUsed)
@@ -823,9 +823,9 @@ func doGasPriceIncrease(t *testing.T, txTipCap, txFeeCap, newTip, newBaseFee int
 		GasTipCap: big.NewInt(txTipCap),
 		GasFeeCap: big.NewInt(txFeeCap),
 	})
-	newTx, err := mgr.increaseGasPrice(context.Background(), &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+	newTx, err := mgr.increaseGasPrice(context.Background(), tx)
 	require.NoError(t, err)
-	return tx, newTx.t
+	return tx, newTx
 }
 
 func TestIncreaseGasPrice(t *testing.T) {
@@ -928,17 +928,17 @@ func TestIncreaseGasPriceNotExponential(t *testing.T) {
 	// Run IncreaseGasPrice a bunch of times in a row to simulate a very fast resubmit loop.
 	ctx := context.Background()
 	for {
-		newTx, err := mgr.increaseGasPrice(ctx, &rskWrappedTx{tx, tx.GasFeeCap(), tx.GasTipCap()})
+		newTx, err := mgr.increaseGasPrice(ctx, tx)
 		if err != nil {
 			break
 		}
-		tx = newTx.t
+		tx = newTx
 	}
 	lastTip, lastFee := tx.GasTipCap(), tx.GasFeeCap()
 	require.Equal(t, lastTip.Int64(), int64(36))
 	require.Equal(t, lastFee.Int64(), int64(493))
 	// Confirm that fees stop rising
-	_, err := mgr.increaseGasPrice(ctx, &rskWrappedTx{tx, lastFee, lastTip})
+	_, err := mgr.increaseGasPrice(ctx, tx)
 	require.Error(t, err)
 }
 
