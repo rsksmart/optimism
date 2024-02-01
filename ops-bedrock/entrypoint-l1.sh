@@ -2,7 +2,7 @@
 set -exu
 
 DEFAULT_JVM_OPTS="-Xms4G"
-RSKJ_SYS_PROPS="-Drpc.providers.web.http.bind_address=0.0.0.0 -Drpc.providers.web.http.hosts.0=localhost -Drpc.providers.web.http.hosts.1=127.0.0.1 -Drpc.providers.web.http.hosts.2=::1"
+RSKJ_SYS_PROPS="-Dlogback.configurationFile=/etc/rsk/logback.xml -Drsk.conf.file=/etc/rsk/node.conf -Drpc.providers.web.http.bind_address=0.0.0.0 -Drpc.providers.web.http.hosts.0=localhost -Drpc.providers.web.http.hosts.1=127.0.0.1 -Drpc.providers.web.http.hosts.2=::1"
 RSKJ_CLASS="co.rsk.Start"
 RSKJ_OPTS="--regtest"
 

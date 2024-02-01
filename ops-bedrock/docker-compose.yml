@@ -31,7 +31,6 @@ services:
       - "8546:4445"
       - "6060:5050"
     volumes:
-      - "${PWD}/../.devnet/l1_data:/var/lib/rsk/.rsk"
       - "${PWD}/rskj.logback.xml:/etc/rsk/logback.xml"
       - "${PWD}/rskj_deployer.node.conf:/etc/rsk/node.conf"
 
@@ -44,7 +43,7 @@ services:
       - "8546:4445"
       - "6060:5050"
     volumes:
-      - "${PWD}/../.devnet/l1_data:/var/lib/rsk/.rsk"
+      - "${PWD}/../.devnet/genesis-l1.json:/var/lib/rsk-dev.json"
       - "${PWD}/rskj.logback.xml:/etc/rsk/logback.xml"
       - "${PWD}/rskj.node.conf:/etc/rsk/node.conf"
 

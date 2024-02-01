@@ -1,4 +1,5 @@
 import argparse
+from email.policy import default
 import logging
 import os
 import subprocess
@@ -12,6 +13,7 @@ import http.client
 from multiprocessing import Process, Queue
 import concurrent.futures
 from collections import namedtuple
+import traceback
 
 
 import devnet.log_setup
@@ -87,14 +89,14 @@ def main():
     )
 
     if args.test:
-      log.info('Testing deployed devnet')
-      devnet_test(paths)
-      return
+        log.info('Testing deployed devnet')
+        devnet_test(paths)
+        return
 
     os.makedirs(devnet_dir, exist_ok=True)
 
     if args.allocs:
-        devnet_l1_genesis(paths)
+        generate_allocs(paths)
         return
 
     git_commit = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
@@ -106,7 +108,7 @@ def main():
     else:
         log.info(f'Building docker images for git commit {git_commit} ({git_date})')
         run_command(['docker', 'compose', 'build', '--progress', 'plain',
-                     '--build-arg', f'GIT_COMMIT={git_commit}', '--build-arg', f'GIT_DATE={git_date}'],
+                    '--build-arg', f'GIT_COMMIT={git_commit}', '--build-arg', f'GIT_DATE={git_date}'],
                     cwd=paths.ops_bedrock_dir, env={
             'PWD': paths.ops_bedrock_dir,
             'DOCKER_BUILDKIT': '1', # (should be available by default in later versions, but explicitly enable it anyway)
@@ -136,8 +138,8 @@ def deploy_contracts(paths):
 
     # deploy the create2 deployer
     run_command([
-      'cast', 'publish', '--rpc-url', 'http://127.0.0.1:8545',
-      '0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222'
+        'cast', 'publish', '--rpc-url', 'http://127.0.0.1:8545',
+        '0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222'
     ], env={}, cwd=paths.contracts_bedrock_dir)
 
     fqn = 'scripts/Deploy.s.sol:Deploy'
@@ -161,7 +163,76 @@ def init_devnet_l1_deploy_config(paths, update_timestamp=False):
         deploy_config['l1GenesisBlockTimestamp'] = '{:#x}'.format(int(time.time()))
     write_json(paths.devnet_config_path, deploy_config)
 
-def devnet_l1_genesis(paths: Bunch):
+def extDumpState(url: str, account: str):
+    log.info(f'Requesting state dump for account: {account}')
+    conn = http.client.HTTPConnection(url)
+    headers = {'Content-type': 'application/json'}
+    body = f'{{"id":2, "jsonrpc":"2.0", "method": "ext_dumpState", "params":["{account}", true, true]}}'
+    log.info(f'body: {body}')
+    conn.request('POST', '/', body, headers)
+    response = conn.getresponse()
+    data = response.read().decode()
+    log.info(f'extDumpState data: {data}')
+    conn.close()
+
+def copy_from_docker(guest_path: str, host_path: str, paths: Bunch):
+    log.info(f'Copying {guest_path} from docker to {host_path}')
+    run_command([
+        'docker', 'cp', guest_path, host_path
+    ], cwd=paths.ops_bedrock_dir, env={ 'PWD': paths.ops_bedrock_dir })
+    # could verify here
+
+def prefix_hash(hash:str):
+    return hash if hash.startswith('0x') else f'0x{hash}'
+
+def prefix_hash_keys_for(dictionary):
+    prefixed_dict = {}
+    for key in dictionary.keys():
+        prefixed_key = prefix_hash(key)
+        prefixed_dict[prefixed_key] = dictionary[key]
+    return prefixed_dict
+
+def extract_contract_data(account_data):
+    contract = account_data['contract']
+    data = {}
+    data['codeHash'] = prefix_hash(contract['codeHash'])
+    data['storage'] = prefix_hash_keys_for(contract['data'])
+    data['code'] = prefix_hash(contract['code'])
+    return data
+
+def retrieve_dump_for(account: str, paths: Bunch):
+    filename = pjoin(paths.devnet_dir, 'rskdump-' + account + '.json')
+    log.info(f'Getting account dump from {filename}')
+    if os.path.exists(filename):
+        return read_json(filename)
+
+def merge_alloc(allocs, account, account_data):
+    log.info(f'Merging account data')
+
+    if 'contract' in account_data:
+        account_data = extract_contract_data(account_data)
+
+    account_data['nonce'] = int(account_data['nonce']) if 'nonce' in account_data else 0
+    account_data['balance'] = account_data['balance'] if 'balance' in account_data and account_data['balance'] else "0"
+    allocs['accounts'][prefix_hash(account)] = account_data
+    # TODO: missing account.root and account.key in allocs. Could be not needed?
+    return allocs
+
+def merge_rsk_genesis(paths: Bunch):
+    log.info('Merging generated genesis file with RSK regtest default')
+
+    if not os.path.isfile(paths.genesis_l1_path):
+        log.error(f'No L1 genesis file at {paths.genesis_l1_path}')
+        exit(1)
+
+    generated_genesis = read_json(paths.genesis_l1_path)
+    default_genesis = read_json(pjoin(paths.ops_bedrock_dir, 'rsk-dev.json'))
+    merged_genesis = {**default_genesis, **generated_genesis}
+    log.info(f'Writing updated genesis to {paths.genesis_l1_path}')
+    write_json(paths.genesis_l1_path, merged_genesis)
+
+
+def generate_allocs(paths: Bunch):
     log.info('Generating L1 genesis state')
     init_devnet_l1_deploy_config(paths)
 
@@ -177,20 +248,41 @@ def devnet_l1_genesis(paths: Bunch):
         if err:
             raise Exception(f"Exception occurred in child process: {err}")
 
-        # we will not likely need these as rsk cannot dump block in the same way as to reconstruct genesis from it. Keeping it here for now though, in case it's used elsewhere
-        res = debug_dumpBlock('127.0.0.1:8545')
+        # need this to get the latest state root. However I am not sure that this is reliable enough. Maybe getting it from tx would be better?
+        res = getLatestBlock('127.0.0.1:8545')
         response = json.loads(res)
-        allocs = response['result']
+        log.info(f'latest block response: {response}')
+        state_root = response['result']['stateRoot']
+        log.info(f'state_root: {state_root}')
 
-        write_json(paths.allocs_path, allocs)
-    finally:
-        run_command([
-            'docker', 'stop', 'l1_deployer'
-        ], cwd=paths.mono_repo_dir)
-        run_command([
-            'docker', 'rm', 'l1_deployer'
-        ], cwd=paths.mono_repo_dir)
-
+        rsk_allocs = {"root": state_root, "accounts": {}}
+        contracts = read_json(paths.addresses_json_path)
+        # TODO: also do all EOA accounts
+        for contract in contracts.keys():
+            account = contracts[contract].lower()
+            extDumpState('127.0.0.1:8545', account)
+            if account.startswith('0x'):
+                account = account[2:]
+            filename = 'rskdump-' + account + '.json'
+            copy_from_docker(f'l1_deployer:/var/lib/rsk/{filename}', paths.devnet_dir, paths)
+            dump = retrieve_dump_for(account, paths)
+            rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
+        log.info(f'Writing allocs to {paths.allocs_path}')
+        write_json(paths.allocs_path, rsk_allocs)
+    # FIXME: uncomment after debugging
+    # finally:
+    #     run_command([
+    #         'docker', 'compose', 'down', 'l1_deployer'
+    #     ], cwd=paths.ops_bedrock_dir)
+    # FIXME: delete after debugging
+    except Exception as e:
+        print("An error occurred:", e)
+        with traceback:
+            traceback.print_exc()
+        exit(1)
+    run_command([
+        'docker', 'compose', 'down', 'l1_deployer'
+    ], cwd=paths.ops_bedrock_dir)
 
 # Bring up the devnet where the contracts are deployed to L1
 def devnet_deploy(paths):
@@ -199,14 +291,24 @@ def devnet_deploy(paths):
     else:
         log.info('Generating L1 genesis.')
         if os.path.exists(paths.allocs_path) == False:
-            devnet_l1_genesis(paths)
+            generate_allocs(paths)
 
         # It's odd that we want to regenerate the regtest.json file with
         # an updated timestamp different than the one used in the devnet_l1_genesis
         # function.  But, without it, CI flakes on this test rather consistently.
         # If someone reads this comment and understands why this is being done, please
         # update this comment to explain.
+        log.info('Updating timestamp in the config')
         init_devnet_l1_deploy_config(paths, update_timestamp=True)
+        run_command([
+            'go', 'run', 'cmd/main.go', 'genesis', 'l1',
+            '--deploy-config', paths.devnet_config_path,
+            '--l1-allocs', paths.allocs_path,
+            '--l1-deployments', paths.addresses_json_path,
+            '--outfile.l1', paths.genesis_l1_path,
+        ], cwd=paths.op_node_dir)
+
+    merge_rsk_genesis(paths)
 
     log.info('Starting L1.')
     run_command(['docker', 'compose', 'up', '-d', 'l1'], cwd=paths.ops_bedrock_dir, env={
@@ -270,8 +372,8 @@ def eth_accounts(url):
     return data
 
 
-def debug_dumpBlock(url):
-    log.info(f'Fetch debug_dumpBlock {url}')
+def getLatestBlock(url):
+    log.info(f'Fetch getBlockByNumber {url}')
     conn = http.client.HTTPConnection(url)
     headers = {'Content-type': 'application/json'}
     body = '{"id":3, "jsonrpc":"2.0", "method": "eth_getBlockByNumber", "params":["latest", true]}'
@@ -318,13 +420,13 @@ def devnet_test(paths):
     # And do not use devnet system addresses, to avoid breaking fee-estimation or nonce values.
     run_commands([
         CommandPreset('erc20-test',
-          ['npx', 'hardhat',  'deposit-erc20', '--network',  'regtest',
-           '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '14'],
-          cwd=paths.sdk_dir, timeout=8*60),
-        CommandPreset('eth-test',
-          ['npx', 'hardhat',  'deposit-eth', '--network',  'regtest',
-           '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '15'],
-          cwd=paths.sdk_dir, timeout=8*60)
+            ['npx', 'hardhat',  'deposit-erc20', '--network',  'regtest',
+            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '14'],
+            cwd=paths.sdk_dir, timeout=8*60),
+            CommandPreset('eth-test',
+            ['npx', 'hardhat',  'deposit-eth', '--network',  'regtest',
+            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '15'],
+            cwd=paths.sdk_dir, timeout=8*60)
     ], max_workers=2)
 
 
@@ -340,7 +442,7 @@ def run_commands(commands: list[CommandPreset], max_workers=2):
 
 def run_command_preset(command: CommandPreset):
     with subprocess.Popen(command.args, cwd=command.cwd,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
         try:
             # Live output processing
             for line in proc.stdout:
