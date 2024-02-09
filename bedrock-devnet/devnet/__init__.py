@@ -1,11 +1,9 @@
 import argparse
-from email.policy import default
 import logging
 import os
 import subprocess
 import json
 import socket
-import calendar
 import datetime
 import time
 import shutil
@@ -60,6 +58,7 @@ def main():
     contracts_bedrock_dir = pjoin(monorepo_dir, 'packages', 'contracts-bedrock')
     deployment_dir = pjoin(contracts_bedrock_dir, 'deployments', 'regtest')
     op_node_dir = pjoin(args.monorepo_dir, 'op-node')
+    op_rskj = pjoin(args.monorepo_dir, '../rsk/rskj')
     ops_bedrock_dir = pjoin(monorepo_dir, 'ops-bedrock')
     deploy_config_dir = pjoin(contracts_bedrock_dir, 'deploy-config')
     devnet_config_path = pjoin(deploy_config_dir, 'regtest.json')
@@ -77,6 +76,7 @@ def main():
       devnet_config_path=devnet_config_path,
       devnet_config_template_path=devnet_config_template_path,
       op_node_dir=op_node_dir,
+      op_rskj=op_rskj,
       ops_bedrock_dir=ops_bedrock_dir,
       ops_chain_ops=ops_chain_ops,
       sdk_dir=sdk_dir,
@@ -218,18 +218,65 @@ def merge_alloc(allocs, account, account_data):
     # TODO: missing account.root and account.key in allocs. Could be not needed?
     return allocs
 
-def merge_rsk_genesis(paths: Bunch):
+def merge_rsk_genesis(generated_genesis, paths: Bunch):
     log.info('Merging generated genesis file with RSK regtest default')
-
-    if not os.path.isfile(paths.genesis_l1_path):
-        log.error(f'No L1 genesis file at {paths.genesis_l1_path}')
-        exit(1)
-
-    generated_genesis = read_json(paths.genesis_l1_path)
     default_genesis = read_json(pjoin(paths.ops_bedrock_dir, 'rsk-dev.json'))
-    merged_genesis = {**default_genesis, **generated_genesis}
-    log.info(f'Writing updated genesis to {paths.genesis_l1_path}')
-    write_json(paths.genesis_l1_path, merged_genesis)
+
+    return {**default_genesis, **generated_genesis}
+
+def format_genesis_for_rsk(genesis_json, paths):
+    log.info('Fromatting generated genesis file for use in RSK')
+    base_genesis_keys = {
+        'coinbase',
+        'timestamp',
+        'parentHash',
+        'extraData',
+        'nonce',
+        'bitcoinMergedMiningHeader',
+        'bitcoinMergedMiningMerkleProof',
+        'bitcoinMergedMiningCoinbaseTransaction',
+        'minimumGasPrice',
+    }
+    valid_rsk_genesis = {}
+    # fill common
+    for key in base_genesis_keys:
+        valid_rsk_genesis[key] = genesis_json[key]
+    valid_rsk_genesis['gasLimit'] = '0x989680'
+    valid_rsk_genesis['difficulty'] = '0x0000000001'
+    # handle special cases
+    if 'mixHash' in genesis_json:
+        valid_rsk_genesis['mixhash'] = genesis_json['mixHash']
+    if 'alloc' in genesis_json:
+      # transform alloc
+      allocs = genesis_json['alloc']
+      valid_allocs = {}
+      for key in allocs.keys():
+          valid_alloc = {}
+          alloc = allocs[key]
+          if 'balance' in alloc:
+              valid_alloc['balance'] = alloc['balance'][2:]
+          if 'nonce' in alloc:
+              valid_alloc['nonce'] = alloc['nonce'][2:]
+          if 'code' in alloc:
+              valid_alloc['contract'] = {
+                  'code': alloc['code'][2:]
+              }
+
+          if 'storage' in alloc:
+              data = {}
+              for data_point in alloc['storage'].keys():
+                  data[data_point[2:]] = alloc['storage'][data_point][2:]
+              valid_alloc['contract'] = {
+                  **valid_alloc['contract'],
+                  'data': data
+              }
+          valid_allocs[key] = valid_alloc
+
+      valid_rsk_genesis['alloc'] = valid_allocs
+
+    return valid_rsk_genesis
+
+
 
 
 def generate_allocs(paths: Bunch):
@@ -269,20 +316,10 @@ def generate_allocs(paths: Bunch):
             rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
         log.info(f'Writing allocs to {paths.allocs_path}')
         write_json(paths.allocs_path, rsk_allocs)
-    # FIXME: uncomment after debugging
-    # finally:
-    #     run_command([
-    #         'docker', 'compose', 'down', 'l1_deployer'
-    #     ], cwd=paths.ops_bedrock_dir)
-    # FIXME: delete after debugging
-    except Exception as e:
-        print("An error occurred:", e)
-        with traceback:
-            traceback.print_exc()
-        exit(1)
-    run_command([
-        'docker', 'compose', 'down', 'l1_deployer'
-    ], cwd=paths.ops_bedrock_dir)
+    finally:
+        run_command([
+            'docker', 'compose', 'down', 'l1_deployer'
+        ], cwd=paths.ops_bedrock_dir)
 
 # Bring up the devnet where the contracts are deployed to L1
 def devnet_deploy(paths):
@@ -308,7 +345,19 @@ def devnet_deploy(paths):
             '--outfile.l1', paths.genesis_l1_path,
         ], cwd=paths.op_node_dir)
 
-    merge_rsk_genesis(paths)
+    if not os.path.isfile(paths.genesis_l1_path):
+        log.error(f'No L1 genesis file at {paths.genesis_l1_path}')
+        exit(1)
+
+    write_json(
+        pjoin(paths.devnet_dir, 'rsk-dev.json'),
+        format_genesis_for_rsk(
+            merge_rsk_genesis(
+                read_json(paths.genesis_l1_path),
+                paths
+            ), paths
+        )
+    )
 
     log.info('Starting L1.')
     run_command(['docker', 'compose', 'up', '-d', 'l1'], cwd=paths.ops_bedrock_dir, env={

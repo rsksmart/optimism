@@ -1,4 +1,4 @@
-FROM rsksmart/rskj:latest
+FROM jurajpiar/rskj:5.4.0
 
 COPY entrypoint-l1.sh /entrypoint.sh
 
