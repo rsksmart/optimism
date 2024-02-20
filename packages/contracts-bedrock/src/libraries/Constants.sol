@@ -34,10 +34,10 @@ library Constants {
     ///         for a production network.
     function DEFAULT_RESOURCE_CONFIG() internal pure returns (ResourceMetering.ResourceConfig memory) {
         ResourceMetering.ResourceConfig memory config = ResourceMetering.ResourceConfig({
-            maxResourceLimit: 20_000_000,
-            elasticityMultiplier: 10,
-            baseFeeMaxChangeDenominator: 8,
-            minimumBaseFee: 1 gwei,
+            maxResourceLimit: 4_500_000,
+            elasticityMultiplier: 2,
+            baseFeeMaxChangeDenominator: 2,
+            minimumBaseFee: 0.05 gwei,
             systemTxMaxGas: 1_000_000,
             maximumBaseFee: type(uint128).max
         });

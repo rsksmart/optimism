@@ -134,7 +134,10 @@ abstract contract ResourceMetering is Initializable {
         // division by zero for L1s that don't support 1559 or to avoid excessive gas burns during
         // periods of extremely low L1 demand. One-day average gas fee hasn't dipped below 1 gwei
         // during any 1 day period in the last 5 years, so should be fine.
-        uint256 gasCost = resourceCost / Math.max(block.basefee, 1 gwei);
+
+        // Rootstock: this will not be needed when BASEFEE opcode gets merged into Rootstock. Until then, 0.05 seems
+        // to be a reasonable value for the PoC time according to the Op Stack above description.
+        uint256 gasCost = resourceCost / Math.max(block.basefee, 0.05 gwei);
 
         // Give the user a refund based on the amount of gas they used to do all of the work up to
         // this point. Since we're at the end of the modifier, this should be pretty accurate. Acts

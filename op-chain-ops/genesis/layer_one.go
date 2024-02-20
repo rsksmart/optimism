@@ -22,10 +22,10 @@ var (
 	// The default values for the ResourceConfig, used as part of
 	// an EIP-1559 curve for deposit gas.
 	DefaultResourceConfig = bindings.ResourceMeteringResourceConfig{
-		MaxResourceLimit:            20_000_000,
-		ElasticityMultiplier:        10,
-		BaseFeeMaxChangeDenominator: 8,
-		MinimumBaseFee:              params.GWei,
+		MaxResourceLimit:            4_500_000,
+		ElasticityMultiplier:        2,
+		BaseFeeMaxChangeDenominator: 2,
+		MinimumBaseFee:              0.05 * params.GWei,
 		SystemTxMaxGas:              1_000_000,
 	}
 )
