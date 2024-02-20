@@ -32,10 +32,10 @@ export const predeploys = {
 const uint128Max = ethers.BigNumber.from('0xffffffffffffffffffffffffffffffff')
 
 export const defaultResourceConfig = {
-  maxResourceLimit: 20_000_000,
-  elasticityMultiplier: 10,
-  baseFeeMaxChangeDenominator: 8,
-  minimumBaseFee: ethers.utils.parseUnits('1', 'gwei'),
+  maxResourceLimit: 4_500_000,
+  elasticityMultiplier: 2,
+  baseFeeMaxChangeDenominator: 2,
+  minimumBaseFee: ethers.utils.parseUnits('0.05', 'gwei'),
   systemTxMaxGas: 1_000_000,
   maximumBaseFee: uint128Max,
 }

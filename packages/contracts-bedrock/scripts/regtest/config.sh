@@ -76,8 +76,8 @@ config=$(cat << EOL
   "governanceTokenName": "Optimism",
   "governanceTokenOwner": "$GS_ADMIN_ADDRESS",
 
-  "l2GenesisBlockGasLimit": "0x1c9c380",
-  "l2GenesisBlockBaseFeePerGas": "0x3b9aca00",
+  "l2GenesisBlockGasLimit": "0x67C280",
+  "l2GenesisBlockBaseFeePerGas": "0x3dfd240",
   "l2GenesisRegolithTimeOffset": "0x0",
 
   "eip1559Denominator": 50,
