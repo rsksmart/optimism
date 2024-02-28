@@ -22,7 +22,7 @@ const config: HardhatUserConfig = {
       ],
     },
     regtest: {
-      url: process.env.L1_RPC || 'http://localhost:4444',
+      url: process.env.L1_RPC || 'http://localhost:8545',
       accounts: [
         'c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4',
         '082f57b8084286a079aeb9f2d0e17e565ced44a2cb9ce4844e6d4b9d89f3f595'
@@ -76,6 +76,7 @@ const config: HardhatUserConfig = {
       ],
       hivenet: ['../contracts-bedrock/deployments/hivenet'],
       devnetL1: ['../contracts-bedrock/deployments/devnetL1'],
+      regtest: ['../contracts-bedrock/deployments/regtest'],
       goerli: [
         '../contracts-bedrock/deployments/goerli',
         '../contracts/deployments/goerli',

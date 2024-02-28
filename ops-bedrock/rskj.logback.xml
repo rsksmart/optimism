@@ -56,69 +56,71 @@
     </appender>
 
     <!-- Loggers -->
-    <logger name="execute" level="ERROR"/>
-    <logger name="blockvalidator" level="ERROR"/>
-    <logger name="blockexecutor" level="ERROR"/>
-    <logger name="general" level="ALL"/>
-    <logger name="gaspricetracker" level="ERROR"/>
-    <logger name="web3" level="ERROR"/>
-    <logger name="repository" level="ERROR"/>
-    <logger name="VM" level="ALL"/>
-    <logger name="blockqueue" level="ERROR"/>
-    <logger name="io.netty" level="ERROR"/>
-    <logger name="block" level="ERROR"/>
-    <logger name="minerserver" level="ERROR"/>
-    <logger name="txbuilderex" level="ERROR"/>
-    <logger name="pendingstate" level="ERROR"/>
-    <logger name="hsqldb.db" level="ERROR"/>
-    <logger name="TCK-Test" level="ERROR"/>
-    <logger name="db" level="ALL"/>
-    <logger name="net" level="ERROR"/>
-    <logger name="start" level="ALL"/>
-    <logger name="cli" level="ALL"/>
-    <logger name="txs" level="ERROR"/>
+    <logger name="execute" level="INFO"/>
+    <logger name="blockvalidator" level="INFO"/>
+    <logger name="blockexecutor" level="INFO"/>
+    <logger name="general" level="INFO"/>
+    <logger name="gaspricetracker" level="INFO"/>
+    <logger name="web3" level="INFO"/>
+    <logger name="repository" level="INFO"/>
+    <logger name="VM" level="ERROR"/>
+    <logger name="blockqueue" level="INFO"/>
+    <logger name="io.netty" level="INFO"/>
+    <logger name="block" level="INFO"/>
+    <logger name="minerserver" level="INFO"/>
+    <logger name="txbuilderex" level="INFO"/>
+    <logger name="pendingstate" level="INFO"/>
+    <logger name="hsqldb.db" level="INFO"/>
+    <logger name="TCK-Test" level="INFO"/>
+    <logger name="db" level="INFO"/>
+    <logger name="net" level="INFO"/>
+    <logger name="start" level="INFO"/>
+    <logger name="cli" level="INFO"/>
+    <logger name="txs" level="INFO"/>
     <logger name="gas" level="ERROR"/>
-    <logger name="main" level="ALL"/>
-    <logger name="trie" level="ERROR"/>
-    <logger name="peermonitor" level="ERROR"/>
-    <logger name="bridge" level="ERROR"/>
-    <logger name="rlp" level="ERROR"/>
-    <logger name="messagehandler" level="ERROR"/>
-    <logger name="sync" level="ERROR"/>
-    <logger name="BtcToRskClient" level="ERROR"/>
-    <logger name="ui" level="ERROR"/>
-    <logger name="java.nio" level="ERROR"/>
-    <logger name="org.eclipse.jetty" level="ERROR"/>
-    <logger name="wire" level="ERROR"/>
-    <logger name="BridgeSupport" level="ERROR"/>
-    <logger name="jsonrpc" level="ALL"/>
-    <logger name="wallet" level="ERROR"/>
-    <logger name="blockchain" level="ERROR"/>
-    <logger name="blockprocessor" level="ERROR"/>
-    <logger name="asyncblockprocessor" level="ERROR"/>
-    <logger name="state" level="ERROR"/>
-    <logger name="org.bitcoinj" level="ERROR"/>
-    <logger name="metrics" level="ERROR"/>
-    <logger name="messageProcess" level="ERROR"/>
-    <logger name="co.rsk.db.migration.OrchidToUnitrieMigrator" level="ERROR"/>
-    <logger name="co.rsk.db.migration.MissingOrchidStorageKeysProvider" level="ERROR"/>
-    <logger name="blooms" level="ERROR"/>
-    <logger name="triestore" level="ERROR" />
-    <logger name="btcBlockStore" level="ERROR" />
-    <logger name="secp256k1" level="ERROR" />
-    <logger name="altbn128" level="ERROR" />
+    <logger name="main" level="INFO"/>
+    <logger name="trie" level="INFO"/>
+    <logger name="peermonitor" level="INFO"/>
+    <logger name="bridge" level="INFO"/>
+    <logger name="rlp" level="INFO"/>
+    <logger name="messagehandler" level="INFO"/>
+    <logger name="sync" level="INFO"/>
+    <logger name="BtcToRskClient" level="INFO"/>
+    <logger name="ui" level="INFO"/>
+    <logger name="java.nio" level="INFO"/>
+    <logger name="org.eclipse.jetty" level="INFO"/>
+    <logger name="wire" level="INFO"/>
+    <logger name="BridgeSupport" level="INFO"/>
+    <logger name="jsonrpc" level="INFO"/>
+    <logger name="wallet" level="INFO"/>
+    <logger name="blockchain" level="INFO"/>
+    <logger name="blockprocessor" level="INFO"/>
+    <logger name="asyncblockprocessor" level="INFO"/>
+    <logger name="state" level="INFO"/>
+    <logger name="org.bitcoinj" level="INFO"/>
+    <logger name="metrics" level="INFO"/>
+    <logger name="messageProcess" level="INFO"/>
+    <logger name="co.rsk.db.migration.OrchidToUnitrieMigrator" level="INFO"/>
+    <logger name="co.rsk.db.migration.MissingOrchidStorageKeysProvider" level="INFO"/>
+    <logger name="blooms" level="INFO"/>
+    <logger name="triestore" level="INFO" />
+    <logger name="btcBlockStore" level="INFO" />
+    <logger name="secp256k1" level="INFO" />
+    <logger name="altbn128" level="INFO" />
+    <logger name="co.rsk.net.discovery.PeerExplorer" level="INFO" />
+    <logger name="co.rsk.net.discovery.NodeChallengeManager" level="INFO" />
 
-    <!-- Use ERROR or upper levels for production environments. -->
-    <logger name="com.googlecode.jsonrpc4j" level="ERROR" />
+    <!-- Use INFO or upper levels for production environments. -->
+    <logger name="com.googlecode.jsonrpc4j" level="INFO" />
 
     <!-- Logger for CLI tools -->
-    <logger name="clitool" level="ALL" additivity="false" >
+    <logger name="clitool" level="DEBUG" additivity="false" >
         <appender-ref ref="STDOUT_CLI_TOOL"/>
         <appender-ref ref="FILE-AUDIT"/>
     </logger>
 
     <!-- Root logger -->
-    <root level="WARN">
+    <root level="DEBUG">
         <appender-ref ref="stdout"/>
         <appender-ref ref="FILE-AUDIT"/>
     </root>

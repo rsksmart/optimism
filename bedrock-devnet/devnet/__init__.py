@@ -65,6 +65,7 @@ def main():
     devnet_config_template_path = pjoin(deploy_config_dir, 'regtest-template.json')
     ops_chain_ops = pjoin(monorepo_dir, 'op-chain-ops')
     sdk_dir = pjoin(monorepo_dir, 'packages', 'sdk')
+    genesis_dir=pjoin(devnet_dir, 'genesis')
 
     paths = Bunch(
       mono_repo_dir=monorepo_dir,
@@ -80,8 +81,9 @@ def main():
       ops_bedrock_dir=ops_bedrock_dir,
       ops_chain_ops=ops_chain_ops,
       sdk_dir=sdk_dir,
-      genesis_l1_path=pjoin(devnet_dir, 'genesis-l1.json'),
-      genesis_l2_path=pjoin(devnet_dir, 'genesis-l2.json'),
+      genesis_l1_path=pjoin(genesis_dir, 'l1.json'),
+      genesis_rsk_path=pjoin(genesis_dir, 'rsk-dev.json'),
+      genesis_l2_path=pjoin(genesis_dir, 'l2.json'),
       allocs_path=pjoin(devnet_dir, 'allocs-l1.json'),
       addresses_json_path=pjoin(devnet_dir, 'addresses.json'),
       sdk_addresses_json_path=pjoin(devnet_dir, 'sdk-addresses.json'),
@@ -93,7 +95,7 @@ def main():
         devnet_test(paths)
         return
 
-    os.makedirs(devnet_dir, exist_ok=True)
+    os.makedirs(genesis_dir, exist_ok=True)
 
     if args.allocs:
         generate_allocs(paths)
@@ -224,7 +226,7 @@ def merge_rsk_genesis(generated_genesis, paths: Bunch):
 
     return {**default_genesis, **generated_genesis}
 
-def format_genesis_for_rsk(genesis_json, paths):
+def format_genesis_for_rsk(genesis_json):
     log.info('Fromatting generated genesis file for use in RSK')
     base_genesis_keys = {
         'coinbase',
@@ -254,9 +256,9 @@ def format_genesis_for_rsk(genesis_json, paths):
           valid_alloc = {}
           alloc = allocs[key]
           if 'balance' in alloc:
-              valid_alloc['balance'] = alloc['balance'][2:]
+              valid_alloc['balance'] = str(int(alloc['balance'], 16))
           if 'nonce' in alloc:
-              valid_alloc['nonce'] = alloc['nonce'][2:]
+              valid_alloc['nonce'] = str(int(alloc['nonce'], 16))
           if 'code' in alloc:
               valid_alloc['contract'] = {
                   'code': alloc['code'][2:]
@@ -295,16 +297,13 @@ def generate_allocs(paths: Bunch):
         if err:
             raise Exception(f"Exception occurred in child process: {err}")
 
-        # need this to get the latest state root. However I am not sure that this is reliable enough. Maybe getting it from tx would be better?
-        res = getLatestBlock('127.0.0.1:8545')
-        response = json.loads(res)
-        log.info(f'latest block response: {response}')
-        state_root = response['result']['stateRoot']
+        latest_block = json.loads(getLatestBlock('127.0.0.1:8545'))['result']
+        log.info(f'latest block: {latest_block}')
+        state_root = latest_block['stateRoot']
         log.info(f'state_root: {state_root}')
 
         rsk_allocs = {"root": state_root, "accounts": {}}
         contracts = read_json(paths.addresses_json_path)
-        # TODO: also do all EOA accounts
         for contract in contracts.keys():
             account = contracts[contract].lower()
             extDumpState('127.0.0.1:8545', account)
@@ -314,6 +313,20 @@ def generate_allocs(paths: Bunch):
             copy_from_docker(f'l1_deployer:/var/lib/rsk/{filename}', paths.devnet_dir, paths)
             dump = retrieve_dump_for(account, paths)
             rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
+
+        accounts = json.loads(eth_accounts('127.0.0.1:8545'))['result']
+        log.info(f'l1 accounts: {accounts}')
+
+        for account in accounts:
+            balance = json.loads(eth_getBalance(account, '127.0.0.1:8545'))['result']
+            nonce = json.loads(eth_getTransactionCount(account, '127.0.0.1:8545'))['result']
+            account_data = dict(
+                balance=str(int(balance, 16)),
+                nonce=int(nonce, 16)
+            )
+            log.info(f'{account} data: {account_data}')
+            rsk_allocs = merge_alloc(rsk_allocs, account, account_data)
+
         log.info(f'Writing allocs to {paths.allocs_path}')
         write_json(paths.allocs_path, rsk_allocs)
     finally:
@@ -350,12 +363,12 @@ def devnet_deploy(paths):
         exit(1)
 
     write_json(
-        pjoin(paths.devnet_dir, 'rsk-dev.json'),
+        pjoin(paths.genesis_rsk_path),
         format_genesis_for_rsk(
             merge_rsk_genesis(
                 read_json(paths.genesis_l1_path),
                 paths
-            ), paths
+            )
         )
     )
 
@@ -381,6 +394,9 @@ def devnet_deploy(paths):
 
     rollup_config = read_json(paths.rollup_config_path)
     addresses = read_json(paths.addresses_json_path)
+
+    log.debug('I am sleepy')
+    time.sleep(10) # TODO: there seem to be some kind of strange racing condition event where the l2 genesis file is not fully written/closed by the previous process before starting the l2 node
 
     log.info('Bringing up L2.')
     run_command(['docker', 'compose', 'up', '-d', 'l2'], cwd=paths.ops_bedrock_dir, env={
@@ -414,6 +430,28 @@ def eth_accounts(url):
     conn = http.client.HTTPConnection(url)
     headers = {'Content-type': 'application/json'}
     body = '{"id":2, "jsonrpc":"2.0", "method": "eth_accounts", "params":[]}'
+    conn.request('POST', '/', body, headers)
+    response = conn.getresponse()
+    data = response.read().decode()
+    conn.close()
+    return data
+
+def eth_getBalance(account, url):
+    log.info(f'Fetch balance for {account}')
+    conn = http.client.HTTPConnection(url)
+    headers = {'Content-type': 'application/json'}
+    body = f'{{"id":2, "jsonrpc":"2.0", "method": "eth_getBalance", "params":["{account}"]}}'
+    conn.request('POST', '/', body, headers)
+    response = conn.getresponse()
+    data = response.read().decode()
+    conn.close()
+    return data
+
+def eth_getTransactionCount(account, url):
+    log.info(f'Fetch TX count for {account}')
+    conn = http.client.HTTPConnection(url)
+    headers = {'Content-type': 'application/json'}
+    body = f'{{"id":2, "jsonrpc":"2.0", "method": "eth_getTransactionCount", "params":["{account}", "latest"]}}'
     conn.request('POST', '/', body, headers)
     response = conn.getresponse()
     data = response.read().decode()

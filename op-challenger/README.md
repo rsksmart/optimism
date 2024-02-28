@@ -47,7 +47,7 @@ DISPUTE_GAME_FACTORY=$(jq -r .DisputeGameFactoryProxy .devnet/addresses.json)
   --agree-with-proposed-output=true \
   --datadir temp/challenger-data \
   --cannon-rollup-config .devnet/rollup.json  \
-  --cannon-l2-genesis .devnet/genesis-l2.json \
+  --cannon-l2-genesis .devnet/genesis/l2.json \
   --cannon-bin ./cannon/bin/cannon \
   --cannon-server ./op-program/bin/op-program \
   --cannon-prestate ./op-program/bin/prestate.json \
