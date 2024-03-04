@@ -11,10 +11,6 @@ import http.client
 from multiprocessing import Process, Queue
 import concurrent.futures
 from collections import namedtuple
-import traceback
-
-
-import devnet.log_setup
 
 pjoin = os.path.join
 
@@ -24,6 +20,7 @@ parser.add_argument('--allocs', help='Only create the allocs and exit', type=boo
 parser.add_argument('--test', help='Tests the deployment, must already be deployed', type=bool, action=argparse.BooleanOptionalAction)
 
 log = logging.getLogger()
+log.setLevel(logging.DEBUG)
 
 class Bunch:
     def __init__(self, **kwds):
@@ -50,6 +47,10 @@ class ChildProcess:
         return self.errq.get() if not self.errq.empty() else None
 
 
+l1_port = 8545
+l2_port = 9545
+host = '127.0.0.1'
+
 def main():
     args = parser.parse_args()
 
@@ -58,7 +59,6 @@ def main():
     contracts_bedrock_dir = pjoin(monorepo_dir, 'packages', 'contracts-bedrock')
     deployment_dir = pjoin(contracts_bedrock_dir, 'deployments', 'regtest')
     op_node_dir = pjoin(args.monorepo_dir, 'op-node')
-    op_rskj = pjoin(args.monorepo_dir, '../rsk/rskj')
     ops_bedrock_dir = pjoin(monorepo_dir, 'ops-bedrock')
     deploy_config_dir = pjoin(contracts_bedrock_dir, 'deploy-config')
     devnet_config_path = pjoin(deploy_config_dir, 'regtest.json')
@@ -77,7 +77,6 @@ def main():
       devnet_config_path=devnet_config_path,
       devnet_config_template_path=devnet_config_template_path,
       op_node_dir=op_node_dir,
-      op_rskj=op_rskj,
       ops_bedrock_dir=ops_bedrock_dir,
       ops_chain_ops=ops_chain_ops,
       sdk_dir=sdk_dir,
@@ -122,32 +121,30 @@ def main():
 
 
 def deploy_contracts(paths):
-    wait_up(8545)
-    wait_for_rpc_server('127.0.0.1:8545')
-    res = eth_accounts('127.0.0.1:8545')
-
-    response = json.loads(res)
+    wait_up(l1_port)
+    wait_for_rpc_server(f'{host}:{l1_port}')
+    response = eth_accounts(f'{host}:{l1_port}')
     account = response['result'][0]
     log.info(f'Deploying with {account}')
 
     # send some ether to the create2 deployer account
     run_command([
         'cast', 'send', '--from', account,
-        '--rpc-url', 'http://127.0.0.1:8545',
+        '--rpc-url', f'http://{host}:{l1_port}',
         '--unlocked', '--value', '1ether', '0x3fAB184622Dc19b6109349B94811493BF2a45362',
         '--legacy'
     ], env={}, cwd=paths.contracts_bedrock_dir)
 
     # deploy the create2 deployer
     run_command([
-        'cast', 'publish', '--rpc-url', 'http://127.0.0.1:8545',
+        'cast', 'publish', '--rpc-url', f'http://{host}:{l1_port}',
         '0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222'
     ], env={}, cwd=paths.contracts_bedrock_dir)
 
     fqn = 'scripts/Deploy.s.sol:Deploy'
     run_command([
         'forge', 'script', fqn, '-vvv', '--legacy', '--slow', '--sender', account,
-        '--rpc-url', 'http://127.0.0.1:8545', '--broadcast',
+        '--rpc-url', f'http://{host}:{l1_port}', '--broadcast',
         '--unlocked'
     ], env={}, cwd=paths.contracts_bedrock_dir)
 
@@ -156,7 +153,7 @@ def deploy_contracts(paths):
     log.info('Syncing contracts.')
     run_command([
         'forge', 'script', fqn, '-vvv', '--legacy', '--sig', 'sync()',
-        '--rpc-url', 'http://127.0.0.1:8545'
+        '--rpc-url', f'http://{host}:{l1_port}'
     ], env={}, cwd=paths.contracts_bedrock_dir)
 
 def init_devnet_l1_deploy_config(paths, update_timestamp=False):
@@ -251,35 +248,32 @@ def format_genesis_for_rsk(genesis_json):
     if 'alloc' in genesis_json:
       # transform alloc
       allocs = genesis_json['alloc']
-      valid_allocs = {}
-      for key in allocs.keys():
-          valid_alloc = {}
-          alloc = allocs[key]
-          if 'balance' in alloc:
-              valid_alloc['balance'] = str(int(alloc['balance'], 16))
-          if 'nonce' in alloc:
-              valid_alloc['nonce'] = str(int(alloc['nonce'], 16))
-          if 'code' in alloc:
-              valid_alloc['contract'] = {
-                  'code': alloc['code'][2:]
-              }
-
-          if 'storage' in alloc:
-              data = {}
-              for data_point in alloc['storage'].keys():
-                  data[data_point[2:]] = alloc['storage'][data_point][2:]
-              valid_alloc['contract'] = {
-                  **valid_alloc['contract'],
-                  'data': data
-              }
-          valid_allocs[key] = valid_alloc
-
-      valid_rsk_genesis['alloc'] = valid_allocs
+      valid_rsk_genesis['alloc'] = {
+          k: format_alloc_for_rsk(v) for k, v in allocs.items()
+      }
 
     return valid_rsk_genesis
 
+def format_alloc_for_rsk(alloc):
+    valid_alloc = {}
+    if 'balance' in alloc:
+        valid_alloc['balance'] = str(int(alloc['balance'], 16))
+    if 'nonce' in alloc:
+        valid_alloc['nonce'] = str(int(alloc['nonce'], 16))
+    if 'code' in alloc:
+        valid_alloc['contract'] = {
+                  'code': alloc['code'][2:]
+              }
+    if 'storage' in alloc:
+        data = {}
+        for data_point, value in alloc['storage'].items():
+            data[data_point[2:]] = value[2:]
+        valid_alloc['contract'] = {
+                  **valid_alloc['contract'],
+                  'data': data
+              }
 
-
+    return valid_alloc
 
 def generate_allocs(paths: Bunch):
     log.info('Generating L1 genesis state')
@@ -297,7 +291,7 @@ def generate_allocs(paths: Bunch):
         if err:
             raise Exception(f"Exception occurred in child process: {err}")
 
-        latest_block = json.loads(getLatestBlock('127.0.0.1:8545'))['result']
+        latest_block = getLatestBlock(f'{host}:{l1_port}')['result']
         log.info(f'latest block: {latest_block}')
         state_root = latest_block['stateRoot']
         log.info(f'state_root: {state_root}')
@@ -306,7 +300,7 @@ def generate_allocs(paths: Bunch):
         contracts = read_json(paths.addresses_json_path)
         for contract in contracts.keys():
             account = contracts[contract].lower()
-            extDumpState('127.0.0.1:8545', account)
+            extDumpState(f'{host}:{l1_port}', account)
             if account.startswith('0x'):
                 account = account[2:]
             filename = 'rskdump-' + account + '.json'
@@ -314,12 +308,12 @@ def generate_allocs(paths: Bunch):
             dump = retrieve_dump_for(account, paths)
             rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
 
-        accounts = json.loads(eth_accounts('127.0.0.1:8545'))['result']
+        accounts = eth_accounts(f'{host}:{l1_port}')['result']
         log.info(f'l1 accounts: {accounts}')
 
         for account in accounts:
-            balance = json.loads(eth_getBalance(account, '127.0.0.1:8545'))['result']
-            nonce = json.loads(eth_getTransactionCount(account, '127.0.0.1:8545'))['result']
+            balance = eth_getBalance(account, f'{host}:{l1_port}')['result']
+            nonce = eth_getTransactionCount(account, f'{host}:{l1_port}')['result']
             account_data = dict(
                 balance=str(int(balance, 16)),
                 nonce=int(nonce, 16)
@@ -376,8 +370,8 @@ def devnet_deploy(paths):
     run_command(['docker', 'compose', 'up', '-d', 'l1'], cwd=paths.ops_bedrock_dir, env={
         'PWD': paths.ops_bedrock_dir
     })
-    wait_up(8545)
-    wait_for_rpc_server('127.0.0.1:8545')
+    wait_up(l1_port)
+    wait_for_rpc_server(f'{host}:{l1_port}')
 
     if os.path.exists(paths.genesis_l2_path):
         log.info('L2 genesis and rollup configs already generated.')
@@ -385,7 +379,7 @@ def devnet_deploy(paths):
         log.info('Generating L2 genesis and rollup configs.')
         run_command([
             'go', 'run', 'cmd/main.go', 'genesis', 'l2',
-            '--l1-rpc', 'http://localhost:8545',
+            '--l1-rpc', f'http://{host}:{l1_port}',
             '--deploy-config', paths.devnet_config_path,
             '--deployment-dir', paths.deployment_dir,
             '--outfile.l2', paths.genesis_l2_path,
@@ -402,8 +396,8 @@ def devnet_deploy(paths):
     run_command(['docker', 'compose', 'up', '-d', 'l2'], cwd=paths.ops_bedrock_dir, env={
         'PWD': paths.ops_bedrock_dir
     })
-    wait_up(9545)
-    wait_for_rpc_server('127.0.0.1:9545')
+    wait_up(l2_port)
+    wait_for_rpc_server(f'{host}:{l2_port}')
 
     l2_output_oracle = addresses['L2OutputOracleProxy']
     log.info(f'Using L2OutputOracle {l2_output_oracle}')
@@ -425,50 +419,34 @@ def devnet_deploy(paths):
     log.info('Devnet ready.')
 
 
-def eth_accounts(url):
-    log.info(f'Fetch eth_accounts {url}')
+def execute_rpc_call(url, method, params):
     conn = http.client.HTTPConnection(url)
     headers = {'Content-type': 'application/json'}
-    body = '{"id":2, "jsonrpc":"2.0", "method": "eth_accounts", "params":[]}'
+    body = f'{{"id":2, "jsonrpc":"2.0", "method": "{method}", "params": {params}}}'
     conn.request('POST', '/', body, headers)
     response = conn.getresponse()
     data = response.read().decode()
     conn.close()
+    data = json.loads(data)
+    if 'error' in data:
+        raise Exception(f'RPC endpoint error: {data["error"]} for request body: {body}')
     return data
+
+def eth_accounts(url):
+    log.info(f'Fetch eth_accounts {url}')
+    return execute_rpc_call(url, 'eth_accounts', '[]')
 
 def eth_getBalance(account, url):
     log.info(f'Fetch balance for {account}')
-    conn = http.client.HTTPConnection(url)
-    headers = {'Content-type': 'application/json'}
-    body = f'{{"id":2, "jsonrpc":"2.0", "method": "eth_getBalance", "params":["{account}"]}}'
-    conn.request('POST', '/', body, headers)
-    response = conn.getresponse()
-    data = response.read().decode()
-    conn.close()
-    return data
+    return execute_rpc_call(url, 'eth_getBalance', f'["{account}"]')
 
 def eth_getTransactionCount(account, url):
     log.info(f'Fetch TX count for {account}')
-    conn = http.client.HTTPConnection(url)
-    headers = {'Content-type': 'application/json'}
-    body = f'{{"id":2, "jsonrpc":"2.0", "method": "eth_getTransactionCount", "params":["{account}", "latest"]}}'
-    conn.request('POST', '/', body, headers)
-    response = conn.getresponse()
-    data = response.read().decode()
-    conn.close()
-    return data
-
+    return execute_rpc_call(url, 'eth_getTransactionCount', f'["{account}", "latest"]')
 
 def getLatestBlock(url):
     log.info(f'Fetch getBlockByNumber {url}')
-    conn = http.client.HTTPConnection(url)
-    headers = {'Content-type': 'application/json'}
-    body = '{"id":3, "jsonrpc":"2.0", "method": "eth_getBlockByNumber", "params":["latest", true]}'
-    conn.request('POST', '/', body, headers)
-    response = conn.getresponse()
-    data = response.read().decode()
-    conn.close()
-    return data
+    return execute_rpc_call(url, 'eth_getBlockByNumber', '["latest", true]')
 
 
 def wait_for_rpc_server(url):
@@ -499,7 +477,7 @@ CommandPreset = namedtuple('Command', ['name', 'args', 'cwd', 'timeout'])
 def devnet_test(paths):
     # Check the L2 config
     run_command(
-        ['go', 'run', 'cmd/check-l2/main.go', '--l2-rpc-url', 'http://localhost:9545', '--l1-rpc-url', 'http://localhost:8545'],
+        ['go', 'run', 'cmd/check-l2/main.go', '--l2-rpc-url', f'http://{host}:{l2_port}', '--l1-rpc-url', f'http://{host}:{l1_port}'],
         cwd=paths.ops_chain_ops,
     )
 
@@ -572,12 +550,12 @@ def run_command(args, check=True, shell=False, cwd=None, env=None, timeout=None)
 
 def wait_up(port, retries=10, wait_secs=1):
     for i in range(0, retries):
-        log.info(f'Trying 127.0.0.1:{port}')
+        log.info(f'Trying {host}:{port}')
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            s.connect(('127.0.0.1', int(port)))
+            s.connect((host, int(port)))
             s.shutdown(2)
-            log.info(f'Connected 127.0.0.1:{port}')
+            log.info(f'Connected {host}:{port}')
             return True
         except Exception:
             time.sleep(wait_secs)
