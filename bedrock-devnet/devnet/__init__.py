@@ -162,17 +162,306 @@ def init_devnet_l1_deploy_config(paths, update_timestamp=False):
         deploy_config['l1GenesisBlockTimestamp'] = '{:#x}'.format(int(time.time()))
     write_json(paths.devnet_config_path, deploy_config)
 
-def extDumpState(url: str, account: str):
-    log.info(f'Requesting state dump for account: {account}')
+def generate_allocs(paths: Bunch):
+    log.info('Generating L1 genesis state')
+    init_devnet_l1_deploy_config(paths)
+
+    run_command(['docker', 'compose', 'up', '-d', 'l1_deployer'], cwd=paths.ops_bedrock_dir, env={
+        'PWD': paths.ops_bedrock_dir
+    })
+
+    try:
+        forge = ChildProcess(deploy_contracts, paths)
+        forge.start()
+        forge.join()
+        err = forge.get_error()
+        if err:
+            raise Exception(f"Exception occurred in child process: {err}")
+
+        latest_block = getLatestBlock(f'{host}:{l1_port}')['result']
+        log.info(f'latest block: {latest_block}')
+        state_root = latest_block['stateRoot']
+        log.info(f'state_root: {state_root}')
+
+        rsk_allocs = {"root": state_root, "accounts": {}}
+        contracts = read_json(paths.addresses_json_path)
+        for contract in contracts.keys():
+            account = contracts[contract].lower()
+            extDumpState(f'{host}:{l1_port}', account)
+            if account.startswith('0x'):
+                account = account[2:]
+            filename = 'rskdump-' + account + '.json'
+            copy_from_docker(f'l1_deployer:/var/lib/rsk/{filename}', paths.devnet_dir, paths)
+            dump = retrieve_dump_for(account, paths)
+            rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
+
+        accounts = eth_accounts(f'{host}:{l1_port}')['result']
+        log.info(f'l1 accounts: {accounts}')
+
+        for account in accounts:
+            balance = eth_getBalance(account, f'{host}:{l1_port}')['result']
+            nonce = eth_getTransactionCount(account, f'{host}:{l1_port}')['result']
+            account_data = dict(
+                balance=str(int(balance, 16)),
+                nonce=int(nonce, 16)
+            )
+            log.info(f'{account} data: {account_data}')
+            rsk_allocs = merge_alloc(rsk_allocs, account, account_data)
+
+        log.info(f'Writing allocs to {paths.allocs_path}')
+        write_json(paths.allocs_path, rsk_allocs)
+    finally:
+        run_command([
+            'docker', 'compose', 'down', 'l1_deployer'
+        ], cwd=paths.ops_bedrock_dir)
+
+# Bring up the devnet where the contracts are deployed to L1
+def devnet_deploy(paths):
+    if os.path.exists(paths.genesis_l1_path):
+        log.info('L1 genesis already generated.')
+    else:
+        log.info('Generating L1 genesis.')
+        if os.path.exists(paths.allocs_path) == False:
+            generate_allocs(paths)
+
+        # It's odd that we want to regenerate the regtest.json file with
+        # an updated timestamp different than the one used in the generate_allocs
+        # function.  But, without it, CI flakes on this test rather consistently.
+        # If someone reads this comment and understands why this is being done, please
+        # update this comment to explain.
+        log.info('Updating timestamp in the config')
+        init_devnet_l1_deploy_config(paths, update_timestamp=True)
+        run_command([
+            'go', 'run', 'cmd/main.go', 'genesis', 'l1',
+            '--deploy-config', paths.devnet_config_path,
+            '--l1-allocs', paths.allocs_path,
+            '--l1-deployments', paths.addresses_json_path,
+            '--outfile.l1', paths.genesis_l1_path,
+        ], cwd=paths.op_node_dir)
+
+    if not os.path.isfile(paths.genesis_l1_path):
+        log.error(f'No L1 genesis file at {paths.genesis_l1_path}')
+        exit(1)
+
+    write_json(
+        pjoin(paths.genesis_rsk_path),
+        format_genesis_for_rsk(
+            merge_rsk_genesis(
+                read_json(paths.genesis_l1_path),
+                paths
+            )
+        )
+    )
+
+    log.info('Starting L1.')
+    run_command(['docker', 'compose', 'up', '-d', 'l1'], cwd=paths.ops_bedrock_dir, env={
+        'PWD': paths.ops_bedrock_dir
+    })
+    wait_up(l1_port)
+    wait_for_rpc_server(f'{host}:{l1_port}')
+
+    if os.path.exists(paths.genesis_l2_path):
+        log.info('L2 genesis and rollup configs already generated.')
+    else:
+        log.info('Generating L2 genesis and rollup configs.')
+        run_command([
+            'go', 'run', 'cmd/main.go', 'genesis', 'l2',
+            '--l1-rpc', f'http://{host}:{l1_port}',
+            '--deploy-config', paths.devnet_config_path,
+            '--deployment-dir', paths.deployment_dir,
+            '--outfile.l2', paths.genesis_l2_path,
+            '--outfile.rollup', paths.rollup_config_path
+        ], cwd=paths.op_node_dir)
+
+    rollup_config = read_json(paths.rollup_config_path)
+    addresses = read_json(paths.addresses_json_path)
+
+    log.debug('I am sleepy')
+    time.sleep(10) # TODO: there seem to be some kind of strange racing condition event where the l2 genesis file is not fully written/closed by the previous process before starting the l2 node
+
+    log.info('Bringing up L2.')
+    run_command(['docker', 'compose', 'up', '-d', 'l2'], cwd=paths.ops_bedrock_dir, env={
+        'PWD': paths.ops_bedrock_dir
+    })
+    wait_up(l2_port)
+    wait_for_rpc_server(f'{host}:{l2_port}')
+
+    l2_output_oracle = addresses['L2OutputOracleProxy']
+    log.info(f'Using L2OutputOracle {l2_output_oracle}')
+    batch_inbox_address = rollup_config['batch_inbox_address']
+    log.info(f'Using batch inbox {batch_inbox_address}')
+
+    log.info('Bringing up `op-node`, `op-proposer` and `op-batcher`.')
+    run_command(['docker', 'compose', 'up', '-d', 'op-node', 'op-proposer', 'op-batcher'], cwd=paths.ops_bedrock_dir, env={
+        'PWD': paths.ops_bedrock_dir,
+        'L2OO_ADDRESS': l2_output_oracle,
+        'SEQUENCER_BATCH_INBOX_ADDRESS': batch_inbox_address
+    })
+
+    log.info('Bringing up `artifact-server`')
+    run_command(['docker', 'compose', 'up', '-d', 'artifact-server'], cwd=paths.ops_bedrock_dir, env={
+        'PWD': paths.ops_bedrock_dir
+    })
+
+    log.info('Devnet ready.')
+
+
+def wait_for_rpc_server(url):
+    log.info(f'Waiting for RPC server at {url}')
+
+    headers = {'Content-type': 'application/json'}
+    body = '{"id":1, "jsonrpc":"2.0", "method": "eth_chainId", "params":[]}'
+
+    while True:
+        try:
+            conn = http.client.HTTPConnection(url)
+            conn.request('POST', '/', body, headers)
+            response = conn.getresponse()
+            if response.status < 300:
+                log.info(f'RPC server at {url} ready')
+                return
+        except Exception as e:
+            log.info(f'Waiting for RPC server at {url}')
+            time.sleep(1)
+        finally:
+            if conn:
+                conn.close()
+
+CommandPreset = namedtuple('Command', ['name', 'args', 'cwd', 'timeout'])
+
+def devnet_test(paths):
+    # Check the L2 config
+    run_command(
+        ['go', 'run', 'cmd/check-l2/main.go', '--l2-rpc-url', f'http://{host}:{l2_port}', '--l1-rpc-url', f'http://{host}:{l1_port}'],
+        cwd=paths.ops_chain_ops,
+    )
+
+    # Run the two commands with different signers, so the ethereum nonce management does not conflict
+    # And do not use devnet system addresses, to avoid breaking fee-estimation or nonce values.
+    run_commands([
+        CommandPreset('erc20-test',
+            ['npx', 'hardhat',  'deposit-erc20', '--network',  'regtest',
+            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '14'],
+            cwd=paths.sdk_dir, timeout=8*60),
+            CommandPreset('eth-test',
+            ['npx', 'hardhat',  'deposit-eth', '--network',  'regtest',
+            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '15'],
+            cwd=paths.sdk_dir, timeout=8*60)
+    ], max_workers=2)
+
+
+def run_commands(commands: list[CommandPreset], max_workers=2):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(run_command_preset, cmd) for cmd in commands]
+
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                print(result.stdout)
+
+
+def run_command_preset(command: CommandPreset):
+    with subprocess.Popen(command.args, cwd=command.cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+        try:
+            # Live output processing
+            for line in proc.stdout:
+                # Annotate and print the line with timestamp and command name
+                timestamp = datetime.datetime.utcnow().strftime('%H:%M:%S.%f')
+                # Annotate and print the line with the timestamp
+                print(f"[{timestamp}][{command.name}] {line}", end='')
+
+            stdout, stderr = proc.communicate(timeout=command.timeout)
+
+            if proc.returncode != 0:
+                raise RuntimeError(f"Command '{' '.join(command.args)}' failed with return code {proc.returncode}: {stderr}")
+
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Command '{' '.join(command.args)}' timed out!")
+
+        except Exception as e:
+            raise RuntimeError(f"Error executing '{' '.join(command.args)}': {e}")
+
+        finally:
+            # Ensure process is terminated
+            proc.kill()
+    return proc.returncode
+
+
+def run_command(args, check=True, shell=False, cwd=None, env=None, timeout=None):
+    env = env if env else {}
+    return subprocess.run(
+        args,
+        check=check,
+        shell=shell,
+        env={
+            **os.environ,
+            **env
+        },
+        cwd=cwd,
+        timeout=timeout
+    )
+
+
+def wait_up(port, retries=10, wait_secs=1):
+    for i in range(0, retries):
+        log.info(f'Trying {host}:{port}')
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.connect((host, int(port)))
+            s.shutdown(2)
+            log.info(f'Connected {host}:{port}')
+            return True
+        except Exception:
+            time.sleep(wait_secs)
+
+    raise Exception(f'Timed out waiting for port {port}.')
+
+
+def write_json(path, data):
+    with open(path, 'w+') as f:
+        json.dump(data, f, indent='  ')
+
+
+def read_json(path):
+    with open(path, 'r') as f:
+        return json.load(f)
+
+ # RSK-specific functions
+def execute_rpc_call(url, method, params):
     conn = http.client.HTTPConnection(url)
     headers = {'Content-type': 'application/json'}
-    body = f'{{"id":2, "jsonrpc":"2.0", "method": "ext_dumpState", "params":["{account}", true, true]}}'
-    log.info(f'body: {body}')
+    body = f'{{"id":2, "jsonrpc":"2.0", "method": "{method}", "params": {params}}}'
     conn.request('POST', '/', body, headers)
     response = conn.getresponse()
     data = response.read().decode()
-    log.info(f'extDumpState data: {data}')
     conn.close()
+    data = json.loads(data)
+    if 'error' in data:
+        raise Exception(f'RPC endpoint error: {data["error"]} for request body: {body}')
+    return data
+
+def eth_accounts(url):
+    log.info(f'Fetch eth_accounts {url}')
+    return execute_rpc_call(url, 'eth_accounts', '[]')
+
+def eth_getBalance(account, url):
+    log.info(f'Fetch balance for {account}')
+    return execute_rpc_call(url, 'eth_getBalance', f'["{account}"]')
+
+def eth_getTransactionCount(account, url):
+    log.info(f'Fetch TX count for {account}')
+    return execute_rpc_call(url, 'eth_getTransactionCount', f'["{account}", "latest"]')
+
+def getLatestBlock(url):
+    log.info(f'Fetch getBlockByNumber {url}')
+    return execute_rpc_call(url, 'eth_getBlockByNumber', '["latest", true]')
+
+def extDumpState(url: str, account: str):
+    log.info(f'Requesting state dump for account: {account}')
+    # the ext_dumpState endpoint does not return the state but instead it is dumped in a file
+    data = execute_rpc_call(url, 'ext_dumpState', f'["{account}", true, true]')
+    log.info(f'extDumpState data: {data}')
 
 def copy_from_docker(guest_path: str, host_path: str, paths: Bunch):
     log.info(f'Copying {guest_path} from docker to {host_path}')
@@ -274,300 +563,3 @@ def format_alloc_for_rsk(alloc):
               }
 
     return valid_alloc
-
-def generate_allocs(paths: Bunch):
-    log.info('Generating L1 genesis state')
-    init_devnet_l1_deploy_config(paths)
-
-    run_command(['docker', 'compose', 'up', '-d', 'l1_deployer'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir
-    })
-
-    try:
-        forge = ChildProcess(deploy_contracts, paths)
-        forge.start()
-        forge.join()
-        err = forge.get_error()
-        if err:
-            raise Exception(f"Exception occurred in child process: {err}")
-
-        latest_block = getLatestBlock(f'{host}:{l1_port}')['result']
-        log.info(f'latest block: {latest_block}')
-        state_root = latest_block['stateRoot']
-        log.info(f'state_root: {state_root}')
-
-        rsk_allocs = {"root": state_root, "accounts": {}}
-        contracts = read_json(paths.addresses_json_path)
-        for contract in contracts.keys():
-            account = contracts[contract].lower()
-            extDumpState(f'{host}:{l1_port}', account)
-            if account.startswith('0x'):
-                account = account[2:]
-            filename = 'rskdump-' + account + '.json'
-            copy_from_docker(f'l1_deployer:/var/lib/rsk/{filename}', paths.devnet_dir, paths)
-            dump = retrieve_dump_for(account, paths)
-            rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
-
-        accounts = eth_accounts(f'{host}:{l1_port}')['result']
-        log.info(f'l1 accounts: {accounts}')
-
-        for account in accounts:
-            balance = eth_getBalance(account, f'{host}:{l1_port}')['result']
-            nonce = eth_getTransactionCount(account, f'{host}:{l1_port}')['result']
-            account_data = dict(
-                balance=str(int(balance, 16)),
-                nonce=int(nonce, 16)
-            )
-            log.info(f'{account} data: {account_data}')
-            rsk_allocs = merge_alloc(rsk_allocs, account, account_data)
-
-        log.info(f'Writing allocs to {paths.allocs_path}')
-        write_json(paths.allocs_path, rsk_allocs)
-    finally:
-        run_command([
-            'docker', 'compose', 'down', 'l1_deployer'
-        ], cwd=paths.ops_bedrock_dir)
-
-# Bring up the devnet where the contracts are deployed to L1
-def devnet_deploy(paths):
-    if os.path.exists(paths.genesis_l1_path):
-        log.info('L1 genesis already generated.')
-    else:
-        log.info('Generating L1 genesis.')
-        if os.path.exists(paths.allocs_path) == False:
-            generate_allocs(paths)
-
-        # It's odd that we want to regenerate the regtest.json file with
-        # an updated timestamp different than the one used in the devnet_l1_genesis
-        # function.  But, without it, CI flakes on this test rather consistently.
-        # If someone reads this comment and understands why this is being done, please
-        # update this comment to explain.
-        log.info('Updating timestamp in the config')
-        init_devnet_l1_deploy_config(paths, update_timestamp=True)
-        run_command([
-            'go', 'run', 'cmd/main.go', 'genesis', 'l1',
-            '--deploy-config', paths.devnet_config_path,
-            '--l1-allocs', paths.allocs_path,
-            '--l1-deployments', paths.addresses_json_path,
-            '--outfile.l1', paths.genesis_l1_path,
-        ], cwd=paths.op_node_dir)
-
-    if not os.path.isfile(paths.genesis_l1_path):
-        log.error(f'No L1 genesis file at {paths.genesis_l1_path}')
-        exit(1)
-
-    write_json(
-        pjoin(paths.genesis_rsk_path),
-        format_genesis_for_rsk(
-            merge_rsk_genesis(
-                read_json(paths.genesis_l1_path),
-                paths
-            )
-        )
-    )
-
-    log.info('Starting L1.')
-    run_command(['docker', 'compose', 'up', '-d', 'l1'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir
-    })
-    wait_up(l1_port)
-    wait_for_rpc_server(f'{host}:{l1_port}')
-
-    if os.path.exists(paths.genesis_l2_path):
-        log.info('L2 genesis and rollup configs already generated.')
-    else:
-        log.info('Generating L2 genesis and rollup configs.')
-        run_command([
-            'go', 'run', 'cmd/main.go', 'genesis', 'l2',
-            '--l1-rpc', f'http://{host}:{l1_port}',
-            '--deploy-config', paths.devnet_config_path,
-            '--deployment-dir', paths.deployment_dir,
-            '--outfile.l2', paths.genesis_l2_path,
-            '--outfile.rollup', paths.rollup_config_path
-        ], cwd=paths.op_node_dir)
-
-    rollup_config = read_json(paths.rollup_config_path)
-    addresses = read_json(paths.addresses_json_path)
-
-    log.debug('I am sleepy')
-    time.sleep(10) # TODO: there seem to be some kind of strange racing condition event where the l2 genesis file is not fully written/closed by the previous process before starting the l2 node
-
-    log.info('Bringing up L2.')
-    run_command(['docker', 'compose', 'up', '-d', 'l2'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir
-    })
-    wait_up(l2_port)
-    wait_for_rpc_server(f'{host}:{l2_port}')
-
-    l2_output_oracle = addresses['L2OutputOracleProxy']
-    log.info(f'Using L2OutputOracle {l2_output_oracle}')
-    batch_inbox_address = rollup_config['batch_inbox_address']
-    log.info(f'Using batch inbox {batch_inbox_address}')
-
-    log.info('Bringing up `op-node`, `op-proposer` and `op-batcher`.')
-    run_command(['docker', 'compose', 'up', '-d', 'op-node', 'op-proposer', 'op-batcher'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir,
-        'L2OO_ADDRESS': l2_output_oracle,
-        'SEQUENCER_BATCH_INBOX_ADDRESS': batch_inbox_address
-    })
-
-    log.info('Bringing up `artifact-server`')
-    run_command(['docker', 'compose', 'up', '-d', 'artifact-server'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir
-    })
-
-    log.info('Devnet ready.')
-
-
-def execute_rpc_call(url, method, params):
-    conn = http.client.HTTPConnection(url)
-    headers = {'Content-type': 'application/json'}
-    body = f'{{"id":2, "jsonrpc":"2.0", "method": "{method}", "params": {params}}}'
-    conn.request('POST', '/', body, headers)
-    response = conn.getresponse()
-    data = response.read().decode()
-    conn.close()
-    data = json.loads(data)
-    if 'error' in data:
-        raise Exception(f'RPC endpoint error: {data["error"]} for request body: {body}')
-    return data
-
-def eth_accounts(url):
-    log.info(f'Fetch eth_accounts {url}')
-    return execute_rpc_call(url, 'eth_accounts', '[]')
-
-def eth_getBalance(account, url):
-    log.info(f'Fetch balance for {account}')
-    return execute_rpc_call(url, 'eth_getBalance', f'["{account}"]')
-
-def eth_getTransactionCount(account, url):
-    log.info(f'Fetch TX count for {account}')
-    return execute_rpc_call(url, 'eth_getTransactionCount', f'["{account}", "latest"]')
-
-def getLatestBlock(url):
-    log.info(f'Fetch getBlockByNumber {url}')
-    return execute_rpc_call(url, 'eth_getBlockByNumber', '["latest", true]')
-
-
-def wait_for_rpc_server(url):
-    log.info(f'Waiting for RPC server at {url}')
-
-    headers = {'Content-type': 'application/json'}
-    body = '{"id":1, "jsonrpc":"2.0", "method": "eth_chainId", "params":[]}'
-
-    while True:
-        try:
-            conn = http.client.HTTPConnection(url)
-            conn.request('POST', '/', body, headers)
-            response = conn.getresponse()
-            if response.status < 300:
-                log.info(f'RPC server at {url} ready')
-                return
-        except Exception as e:
-            log.info(f'Waiting for RPC server at {url}')
-            time.sleep(1)
-        finally:
-            if conn:
-                conn.close()
-
-
-CommandPreset = namedtuple('Command', ['name', 'args', 'cwd', 'timeout'])
-
-
-def devnet_test(paths):
-    # Check the L2 config
-    run_command(
-        ['go', 'run', 'cmd/check-l2/main.go', '--l2-rpc-url', f'http://{host}:{l2_port}', '--l1-rpc-url', f'http://{host}:{l1_port}'],
-        cwd=paths.ops_chain_ops,
-    )
-
-    # Run the two commands with different signers, so the ethereum nonce management does not conflict
-    # And do not use devnet system addresses, to avoid breaking fee-estimation or nonce values.
-    run_commands([
-        CommandPreset('erc20-test',
-            ['npx', 'hardhat',  'deposit-erc20', '--network',  'regtest',
-            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '14'],
-            cwd=paths.sdk_dir, timeout=8*60),
-            CommandPreset('eth-test',
-            ['npx', 'hardhat',  'deposit-eth', '--network',  'regtest',
-            '--l1-contracts-json-path', paths.addresses_json_path, '--signer-index', '15'],
-            cwd=paths.sdk_dir, timeout=8*60)
-    ], max_workers=2)
-
-
-def run_commands(commands: list[CommandPreset], max_workers=2):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(run_command_preset, cmd) for cmd in commands]
-
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
-                print(result.stdout)
-
-
-def run_command_preset(command: CommandPreset):
-    with subprocess.Popen(command.args, cwd=command.cwd,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
-        try:
-            # Live output processing
-            for line in proc.stdout:
-                # Annotate and print the line with timestamp and command name
-                timestamp = datetime.datetime.utcnow().strftime('%H:%M:%S.%f')
-                # Annotate and print the line with the timestamp
-                print(f"[{timestamp}][{command.name}] {line}", end='')
-
-            stdout, stderr = proc.communicate(timeout=command.timeout)
-
-            if proc.returncode != 0:
-                raise RuntimeError(f"Command '{' '.join(command.args)}' failed with return code {proc.returncode}: {stderr}")
-
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Command '{' '.join(command.args)}' timed out!")
-
-        except Exception as e:
-            raise RuntimeError(f"Error executing '{' '.join(command.args)}': {e}")
-
-        finally:
-            # Ensure process is terminated
-            proc.kill()
-    return proc.returncode
-
-
-def run_command(args, check=True, shell=False, cwd=None, env=None, timeout=None):
-    env = env if env else {}
-    return subprocess.run(
-        args,
-        check=check,
-        shell=shell,
-        env={
-            **os.environ,
-            **env
-        },
-        cwd=cwd,
-        timeout=timeout
-    )
-
-
-def wait_up(port, retries=10, wait_secs=1):
-    for i in range(0, retries):
-        log.info(f'Trying {host}:{port}')
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.connect((host, int(port)))
-            s.shutdown(2)
-            log.info(f'Connected {host}:{port}')
-            return True
-        except Exception:
-            time.sleep(wait_secs)
-
-    raise Exception(f'Timed out waiting for port {port}.')
-
-
-def write_json(path, data):
-    with open(path, 'w+') as f:
-        json.dump(data, f, indent='  ')
-
-
-def read_json(path):
-    with open(path, 'r') as f:
-        return json.load(f)
