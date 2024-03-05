@@ -23,7 +23,7 @@ services:
 
   op_geth_builder:
     build:
-      context: ../op-geth
+      context: https://github.com/rsksmart/op-geth.git#optimism_genesis
       dockerfile: Dockerfile.alltools
     entrypoint: ["echo", "geth build successful"]
 
@@ -48,7 +48,8 @@ services:
     ports:
       - "8545:8545"
       - "8546:8546"
-      - "7060:5050"
+      - "7060:6060"
+      - "5050:5050"
     volumes:
       - "${PWD}/../.devnet/l1_data:/var/lib/rsk/.rsk"
       - "${PWD}/../.devnet/genesis:/etc/rsk/genesis"

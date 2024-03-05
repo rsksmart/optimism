@@ -99,7 +99,7 @@ mod-tidy:
 	# can take a while to index new versions.
 	#
 	# See https://proxy.golang.org/ for more info.
-	export GOPRIVATE="github.com/ethereum-optimism" && go mod tidy
+	export GOPRIVATE="github.com/rsksmart" && go mod tidy
 .PHONY: mod-tidy
 
 clean:
@@ -110,7 +110,7 @@ nuke: clean devnet-clean
 	git clean -Xdf
 .PHONY: nuke
 
-pre-devnet: submodules
+pre-devnet: submodules update-op-geth
 	@if ! [ -x "$(command -v geth)" ]; then \
 		make install-geth; \
 	fi
