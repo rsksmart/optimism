@@ -27,7 +27,14 @@ services:
       dockerfile: Dockerfile.alltools
     entrypoint: ["echo", "geth build successful"]
 
+  op_stock_builder:
+    build:
+      context: https://github.com/illuque/rskj_fork.git#rollup/poc/v0
+    entrypoint: ["echo", "op-stock build successful"]
+
   l1_deployer:
+    depends_on:
+      - op_stock_builder
     build:
       context: .
       dockerfile: Dockerfile.l1_deployer
@@ -37,6 +44,7 @@ services:
       - "8546:8546"
       - "7060:5050"
     volumes:
+      - "${PWD}/../.devnet/logs:/var/lib/rsk/logs"
       - "${PWD}/../.devnet/l1_data:/var/lib/rsk/.rsk"
       - "${PWD}/rskj.logback.xml:/etc/rsk/logback.xml"
       - "${PWD}/rskj_deployer.node.conf:/etc/rsk/node.conf"
@@ -51,11 +59,11 @@ services:
       - "7060:6060"
       - "5050:5050"
     volumes:
+      - "${PWD}/../.devnet/logs:/var/lib/rsk/logs"
       - "${PWD}/../.devnet/l1_data:/var/lib/rsk/.rsk"
-      - "${PWD}/../.devnet/genesis:/etc/rsk/genesis"
       - "${PWD}/rskj.logback.xml:/etc/rsk/logback.xml"
       - "${PWD}/rskj.node.conf:/etc/rsk/node.conf"
-      - "${PWD}/../.devnet/logs:/var/lib/rsk/logs"
+      - "${PWD}/../.devnet/genesis:/etc/rsk/genesis"
 
   l2:
     depends_on:

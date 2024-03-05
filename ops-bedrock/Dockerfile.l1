@@ -1,4 +1,4 @@
-FROM jurajpiar/rskj:5.4.0.3
+FROM ops-bedrock-op_stock_builder:latest
 
 COPY entrypoint-l1.sh /entrypoint.sh
 

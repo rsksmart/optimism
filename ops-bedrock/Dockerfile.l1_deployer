@@ -1,4 +1,4 @@
-FROM franciscotobar/rskj:optimism-6.1.0
+FROM ops-bedrock-op_stock_builder:latest
 
 COPY entrypoint-l1.sh /entrypoint.sh
 
