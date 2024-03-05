@@ -234,7 +234,9 @@ rsk-regtest-delete:
 
 rsk-regtest-start:
 	docker run --name rsk_regtest -d -it \
-	-p 6060:5050 -p 8545:4444 -p 8546:4445 \
+	-p 5050:5050 -p 4444:4444 -p 4445:4445 \
+  -v $(PATH_OPSTACK)/rskj.logback.xml:/etc/rsk/logback.xml \
+  -v $(PATH_OPSTACK)/rskj.node.conf:/etc/rsk/node.conf \
   franciscotobar/rskj:optimism-6.1.0 --regtest --reset
 .PHONY: rsk-regtest-start
 
