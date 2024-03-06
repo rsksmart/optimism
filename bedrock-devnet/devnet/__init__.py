@@ -177,39 +177,7 @@ def generate_allocs(paths: Bunch):
         err = forge.get_error()
         if err:
             raise Exception(f"Exception occurred in child process: {err}")
-
-        latest_block = getLatestBlock(f'{host}:{l1_port}')['result']
-        log.info(f'latest block: {latest_block}')
-        state_root = latest_block['stateRoot']
-        log.info(f'state_root: {state_root}')
-
-        rsk_allocs = {"root": state_root, "accounts": {}}
-        contracts = read_json(paths.addresses_json_path)
-        for contract in contracts.keys():
-            account = contracts[contract].lower()
-            extDumpState(f'{host}:{l1_port}', account)
-            if account.startswith('0x'):
-                account = account[2:]
-            filename = 'rskdump-' + account + '.json'
-            copy_from_docker(f'l1_deployer:/var/lib/rsk/{filename}', paths.devnet_dir, paths)
-            dump = retrieve_dump_for(account, paths)
-            rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
-
-        accounts = eth_accounts(f'{host}:{l1_port}')['result']
-        log.info(f'l1 accounts: {accounts}')
-
-        for account in accounts:
-            balance = eth_getBalance(account, f'{host}:{l1_port}')['result']
-            nonce = eth_getTransactionCount(account, f'{host}:{l1_port}')['result']
-            account_data = dict(
-                balance=str(int(balance, 16)),
-                nonce=int(nonce, 16)
-            )
-            log.info(f'{account} data: {account_data}')
-            rsk_allocs = merge_alloc(rsk_allocs, account, account_data)
-
-        log.info(f'Writing allocs to {paths.allocs_path}')
-        write_json(paths.allocs_path, rsk_allocs)
+        compose_l1_allocs(paths)
     finally:
         run_command([
             'docker', 'compose', 'down', 'l1_deployer'
@@ -563,3 +531,44 @@ def format_alloc_for_rsk(alloc):
               }
 
     return valid_alloc
+
+def extract_eoa_allocs(rsk_allocs):
+    accounts = eth_accounts(f'{host}:{l1_port}')['result']
+    log.info(f'l1 accounts: {accounts}')
+
+    for account in accounts:
+        balance = eth_getBalance(account, f'{host}:{l1_port}')['result']
+        nonce = eth_getTransactionCount(account, f'{host}:{l1_port}')['result']
+        account_data = dict(
+                balance=str(int(balance, 16)),
+                nonce=int(nonce, 16)
+            )
+        log.info(f'{account} data: {account_data}')
+        rsk_allocs = merge_alloc(rsk_allocs, account, account_data)
+    return rsk_allocs
+
+def extract_contract_allocs(paths, rsk_allocs):
+    contracts = read_json(paths.addresses_json_path)
+    for contract in contracts.keys():
+        account = contracts[contract].lower()
+        extDumpState(f'{host}:{l1_port}', account)
+        if account.startswith('0x'):
+            account = account[2:]
+        filename = 'rskdump-' + account + '.json'
+        copy_from_docker(f'l1_deployer:/var/lib/rsk/{filename}', paths.devnet_dir, paths)
+        dump = retrieve_dump_for(account, paths)
+        rsk_allocs = merge_alloc(rsk_allocs, account, dump[account])
+    return rsk_allocs
+
+def compose_l1_allocs(paths):
+    latest_block = getLatestBlock(f'{host}:{l1_port}')['result']
+    log.info(f'latest block: {latest_block}')
+    state_root = latest_block['stateRoot']
+    log.info(f'state_root: {state_root}')
+
+    rsk_allocs = {"root": state_root, "accounts": {}}
+    rsk_allocs = extract_contract_allocs(paths, rsk_allocs)
+    rsk_allocs = extract_eoa_allocs(rsk_allocs)
+
+    log.info(f'Writing allocs to {paths.allocs_path}')
+    write_json(paths.allocs_path, rsk_allocs)
