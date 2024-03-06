@@ -118,6 +118,9 @@ def main():
 
     log.info('Devnet starting')
     devnet_deploy(paths)
+    log.info('Devnet prepared')
+    start_prepared_devnet(paths)
+    log.info('Devnet ready.')
 
 
 def deploy_contracts(paths):
@@ -207,20 +210,9 @@ def devnet_deploy(paths):
             '--outfile.l1', paths.genesis_l1_path,
         ], cwd=paths.op_node_dir)
 
-    if not os.path.isfile(paths.genesis_l1_path):
-        log.error(f'No L1 genesis file at {paths.genesis_l1_path}')
-        exit(1)
+    write_rsk_genesis_file(paths)
 
-    write_json(
-        pjoin(paths.genesis_rsk_path),
-        format_genesis_for_rsk(
-            merge_rsk_genesis(
-                read_json(paths.genesis_l1_path),
-                paths
-            )
-        )
-    )
-
+def start_prepared_devnet(paths):
     log.info('Starting L1.')
     run_command(['docker', 'compose', 'up', '-d', 'l1'], cwd=paths.ops_bedrock_dir, env={
         'PWD': paths.ops_bedrock_dir
@@ -270,9 +262,6 @@ def devnet_deploy(paths):
     run_command(['docker', 'compose', 'up', '-d', 'artifact-server'], cwd=paths.ops_bedrock_dir, env={
         'PWD': paths.ops_bedrock_dir
     })
-
-    log.info('Devnet ready.')
-
 
 def wait_for_rpc_server(url):
     log.info(f'Waiting for RPC server at {url}')
@@ -572,3 +561,18 @@ def compose_l1_allocs(paths):
 
     log.info(f'Writing allocs to {paths.allocs_path}')
     write_json(paths.allocs_path, rsk_allocs)
+
+def write_rsk_genesis_file(paths):
+    if not os.path.isfile(paths.genesis_l1_path):
+        log.error(f'No L1 genesis file at {paths.genesis_l1_path}')
+        exit(1)
+
+    write_json(
+        pjoin(paths.genesis_rsk_path),
+        format_genesis_for_rsk(
+            merge_rsk_genesis(
+                read_json(paths.genesis_l1_path),
+                paths
+            )
+        )
+    )
