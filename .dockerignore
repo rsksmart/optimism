@@ -12,3 +12,7 @@ build/_workspace
 build/bin
 build/_bin
 tests/testdata
+
+!rskj.logback.xml
+!rskj.node.conf
+!rskj.genesis.json

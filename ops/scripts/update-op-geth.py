@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 
 
-import json
 import subprocess
 import os
-
-
-GETH_VERSION='v1.12.0'
 
 
 def main():
@@ -22,7 +18,7 @@ def update_mod(project):
 		'mod',
 		'edit',
 		'-replace',
-		f'github.com/ethereum/go-ethereum@{GETH_VERSION}=github.com/ethereum-optimism/op-geth@optimism'
+		f'github.com/ethereum/go-ethereum=github.com/rsksmart/op-geth@11a70c76751354d7e82def14a56f89f08e59d7b7' # represents tip of github.com/rsksmart/op-geth#rsk/poc-v0
 	], cwd=os.path.join(project), check=True)
 	print('Tidying...')
 	subprocess.run([

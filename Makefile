@@ -99,7 +99,7 @@ mod-tidy:
 	# can take a while to index new versions.
 	#
 	# See https://proxy.golang.org/ for more info.
-	export GOPRIVATE="github.com/ethereum-optimism" && go mod tidy
+	export GOPRIVATE="github.com/rsksmart" && go mod tidy
 .PHONY: mod-tidy
 
 clean:
@@ -110,7 +110,7 @@ nuke: clean devnet-clean
 	git clean -Xdf
 .PHONY: nuke
 
-pre-devnet: submodules
+pre-devnet: submodules update-op-geth
 	@if ! [ -x "$(command -v geth)" ]; then \
 		make install-geth; \
 	fi
@@ -137,7 +137,7 @@ devnet-down:
 .PHONY: devnet-down
 
 devnet-clean:
-	rm -rf ./packages/contracts-bedrock/deployments/devnetL1
+	rm -rf ./packages/contracts-bedrock/deployments/regtest
 	rm -rf ./.devnet
 	cd ./ops-bedrock && docker compose down
 	docker image ls 'ops-bedrock*' --format='{{.Repository}}' | xargs -r docker rmi
@@ -161,7 +161,7 @@ test-unit:
 
 test-integration:
 	bash ./ops-bedrock/test-integration.sh \
-		./packages/contracts-bedrock/deployments/devnetL1
+		./packages/contracts-bedrock/deployments/regtest
 .PHONY: test-integration
 
 # Remove the baseline-commit to generate a base reading & show all issues

@@ -17,3 +17,7 @@
 !/op-wheel
 !/go.mod
 !/go.sum
+!/op-geth
+!rskj.logback.xml
+!rskj.node.conf
+!rskj.genesis.json

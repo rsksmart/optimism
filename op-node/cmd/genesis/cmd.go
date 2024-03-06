@@ -171,7 +171,7 @@ var Subcommands = cli.Commands{
 				depPath, network := filepath.Split(deployDir)
 				hh, err := hardhat.New(network, nil, []string{depPath})
 				if err != nil {
-					return err
+					return fmt.Errorf("cannot create hardhat instance for deploy dir %s: %w", deployDir, err)
 				}
 
 				// Read the appropriate deployment addresses from disk

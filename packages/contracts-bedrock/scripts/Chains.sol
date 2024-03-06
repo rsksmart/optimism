@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 /// @notice Chain IDs for the various networks.
 library Chains {
     uint256 internal constant RootstockRegtest = 33;
+    uint256 internal constant OPRootstockRegtest = 42069;
     uint256 internal constant EthereumMainnet = 1;
     uint256 internal constant OPMainnet = 10;
     uint256 internal constant Goerli = 5;
