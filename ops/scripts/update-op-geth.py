@@ -18,7 +18,7 @@ def update_mod(project):
 		'mod',
 		'edit',
 		'-replace',
-		f'github.com/ethereum/go-ethereum=github.com/rsksmart/op-geth@8b4e5b074d5a19fd1397dd4dcbda424c52311464'
+		f'github.com/ethereum/go-ethereum=github.com/rsksmart/op-geth@11a70c76751354d7e82def14a56f89f08e59d7b7' # represents tip of github.com/rsksmart/op-geth#rsk/poc-v0
 	], cwd=os.path.join(project), check=True)
 	print('Tidying...')
 	subprocess.run([

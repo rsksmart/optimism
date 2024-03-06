@@ -23,7 +23,7 @@ services:
 
   op_geth_builder:
     build:
-      context: https://github.com/rsksmart/op-geth.git#optimism_genesis
+      context: https://github.com/rsksmart/op-geth.git#rsk/poc-v0
       dockerfile: Dockerfile.alltools
     entrypoint: ["echo", "geth build successful"]
 
