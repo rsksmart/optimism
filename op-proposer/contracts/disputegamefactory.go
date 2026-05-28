@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -78,7 +79,16 @@ func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer comm
 	for idx := gameCount - 1; ; idx-- {
 		game, err := f.gameAtIndex(ctx, idx)
 		if err != nil {
-			return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to get dispute game %d: %w", idx, err)
+			// Surface context cancellation/deadline errors rather than masking them as "no proposal found".
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to fetch game at index %d: %w", idx, err)
+			}
+			// Skip games that can't be loaded (e.g., deployed with incompatible implementation).
+			// This avoids blocking the proposer when old games lack expected ABI methods.
+			if idx == 0 {
+				return false, time.Time{}, common.Hash{}, nil
+			}
+			continue
 		}
 		if game.Timestamp.Before(cutoff) {
 			// Reached a game that is before the expected cutoff, so we haven't found a suitable proposal

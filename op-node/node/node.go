@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	gethevent "github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -367,12 +366,16 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 	}
 
 	// Keep subscribed to the L1 heads, which keeps the L1 maintainer pointing to the best headers to sync
-	l1HeadsSub := gethevent.ResubscribeErr(time.Second*10, func(ctx context.Context, err error) (gethevent.Subscription, error) {
-		if err != nil {
-			node.log.Warn("resubscribing after failed L1 subscription", "err", err)
-		}
-		return eth.WatchHeadChanges(ctx, node.l1Source, onL1Head)
-	})
+	// Poll for the L1 unsafe head instead of subscribing via newHeads. The
+	// subscription path delivers a *types.Header from which the L1 ref hash
+	// is recomputed by go-ethereum's keccak; on non-Ethereum L1s (e.g. RSK
+	// with RSKIP-92 hashing) that recomputed hash diverges from the
+	// canonical chain hash and the derivation pipeline reports spurious
+	// reorgs every block. The polling path uses L1BlockRefByLabel, which
+	// flows through the patched InfoByLabel and preserves the RPC-reported
+	// trusted hash.
+	l1HeadsSub := eth.PollBlockChanges(node.log, node.l1Source, onL1Head, eth.Unsafe,
+		time.Second, time.Second*10)
 	go func() {
 		err, ok := <-l1HeadsSub.Err()
 		if !ok {

@@ -21,6 +21,7 @@ func newRPCRecProviderFromConfig(client client.RPC, log log.Logger, metrics cach
 		MaxBatchSize:        config.MaxRequestsPerBatch,
 		ProviderKind:        config.RPCProviderKind,
 		MethodResetDuration: config.MethodResetDuration,
+		ReceiptsValidator:   config.ReceiptsValidator,
 	}
 	return NewCachingRPCReceiptsProvider(client, log, recCfg, metrics, config.ReceiptsCacheSize)
 }
@@ -37,6 +38,11 @@ type RPCReceiptsFetcher struct {
 	log log.Logger
 
 	provKind RPCProviderKind
+
+	// validator, if non-nil, replaces the default validateReceipts call.
+	// Used by non-Ethereum L1 hosts (e.g. RSK) whose receipt trie root or
+	// per-receipt fields don't follow Ethereum semantics.
+	validator ReceiptsValidatorFn
 
 	// availableReceiptMethods tracks which receipt methods can be used for fetching receipts
 	// This may be modified concurrently, but we don't lock since it's a single
@@ -56,6 +62,9 @@ type RPCReceiptsConfig struct {
 	MaxBatchSize        int
 	ProviderKind        RPCProviderKind
 	MethodResetDuration time.Duration
+	// ReceiptsValidator is an optional pluggable replacement for the default
+	// Ethereum-style validateReceipts. If nil, the default is used.
+	ReceiptsValidator ReceiptsValidatorFn
 }
 
 func NewRPCReceiptsFetcher(client rpcClient, log log.Logger, config RPCReceiptsConfig) *RPCReceiptsFetcher {
@@ -64,6 +73,7 @@ func NewRPCReceiptsFetcher(client rpcClient, log log.Logger, config RPCReceiptsC
 		basic:                   NewBasicRPCReceiptsFetcher(client, config.MaxBatchSize),
 		log:                     log,
 		provKind:                config.ProviderKind,
+		validator:               config.ReceiptsValidator,
 		availableReceiptMethods: AvailableReceiptsFetchingMethods(config.ProviderKind),
 		lastMethodsReset:        time.Now(),
 		methodResetDuration:     config.MethodResetDuration,
@@ -105,7 +115,11 @@ func (f *RPCReceiptsFetcher) FetchReceipts(ctx context.Context, blockInfo eth.Bl
 		return nil, err
 	}
 
-	if err = validateReceipts(block, blockInfo.ReceiptHash(), txHashes, result); err != nil {
+	if f.validator != nil {
+		if err = f.validator(ctx, block, blockInfo.ReceiptHash(), txHashes, result); err != nil {
+			return nil, err
+		}
+	} else if err = validateReceipts(block, blockInfo.ReceiptHash(), txHashes, result); err != nil {
 		return nil, err
 	}
 

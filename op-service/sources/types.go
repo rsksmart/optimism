@@ -1,6 +1,7 @@
 package sources
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -16,6 +17,36 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+)
+
+// Hook function types for pluggable L1 chain validation.
+//
+// Default (Ethereum) behavior is preserved when these are nil. Non-Ethereum
+// L1 hosts (e.g. RSK, which uses a binary Unitrie instead of Patricia and a
+// distinct block-hash codec) provide adapter implementations via
+// EthClientConfig.
+type (
+	// BlockVerifierFn validates a fully-fetched block (header + transactions)
+	// for internal consistency. The default implementation recomputes the
+	// block hash and the DeriveSha tx-trie root.
+	BlockVerifierFn func(ctx context.Context, header *types.Header, txs types.Transactions) error
+
+	// HeaderVerifierFn validates a fetched header. The default implementation
+	// recomputes the block hash from the geth-style header and compares to
+	// the RPC-reported hash.
+	HeaderVerifierFn func(ctx context.Context, header *types.Header) error
+
+	// ReceiptsValidatorFn validates a list of receipts against the receipt
+	// trie root declared in the block header. The default implementation
+	// performs per-receipt field checks plus a DeriveSha receipts trie root.
+	ReceiptsValidatorFn func(ctx context.Context, block eth.BlockID, receiptHash common.Hash, txHashes []common.Hash, receipts types.Receipts) error
+
+	// TxHashesFromBlockFn returns the canonical transaction hashes of a
+	// block as reported by the L1 RPC. Used when the local computation of
+	// tx hashes (via tx.Hash()) differs from the L1's, e.g. RSK with its
+	// custom RLP encoding for internal REMASC transactions. If nil, hashes
+	// are computed locally from the decoded transactions.
+	TxHashesFromBlockFn func(ctx context.Context, blockHash common.Hash) ([]common.Hash, error)
 )
 
 // Note: these types are used, instead of the geth types, to enable:
@@ -134,8 +165,8 @@ func (hdr *RPCHeader) Header(trustCache bool, mustBePostMerge bool) (*types.Head
 		}
 	}
 	if !trustCache {
-		if computed := hdr.computeBlockHash(); computed != hdr.Hash {
-			return nil, fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, hdr.Hash)
+		if err := hdr.VerifyHash(); err != nil {
+			return nil, err
 		}
 	}
 	return hdr.CreateGethHeader(), nil
@@ -147,6 +178,17 @@ func (hdr *RPCHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo
 		return nil, err
 	}
 	return eth.HeaderBlockInfoTrusted(hdr.Hash, header), nil
+}
+
+// VerifyHash recomputes the block hash from the geth-style header and
+// compares to the hash reported by the RPC. This is the default Ethereum
+// header verification; non-Ethereum hosts may replace it via
+// EthClientConfig.HeaderVerifier.
+func (hdr *RPCHeader) VerifyHash() error {
+	if computed := hdr.computeBlockHash(); computed != hdr.Hash {
+		return fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, hdr.Hash)
+	}
+	return nil
 }
 
 func (hdr *RPCHeader) BlockID() eth.BlockID {

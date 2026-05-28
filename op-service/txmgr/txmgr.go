@@ -25,7 +25,6 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/retry"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr/metrics"
 )
 
@@ -59,6 +58,17 @@ var (
 	ErrBlobFeeLimit = errors.New("blob fee limit reached")
 	ErrClosed       = errors.New("transaction manager is closed")
 )
+
+// ContractRevertError wraps an error that originated from a contract revert
+// (e.g. "execution reverted", "VM Exception"). The prepare() retry loop uses
+// this to apply a longer backoff matching L1 block time instead of the default
+// 2-second retry, since contract state only changes with new L1 blocks.
+type ContractRevertError struct {
+	Err error
+}
+
+func (e *ContractRevertError) Error() string { return e.Err.Error() }
+func (e *ContractRevertError) Unwrap() error { return e.Err }
 
 type SendResponse struct {
 	Receipt *types.Receipt
@@ -380,22 +390,39 @@ func (m *SimpleTxManager) SendAsync(ctx context.Context, candidate TxCandidate, 
 	}()
 }
 
-// prepare prepares the transaction for sending.
+// prepare prepares the transaction for sending. Backoff between attempts is
+// controlled by cfg.PrepareBackoff (defaults to a fixed 2s when nil); RSK and
+// other non-Ethereum L1s install a revert-aware strategy via that hook so
+// contract reverts back off at L1-block pace.
 func (m *SimpleTxManager) prepare(ctx context.Context, candidate TxCandidate) (*types.Transaction, error) {
-	tx, err := retry.Do(ctx, 30, retry.Fixed(2*time.Second), func() (*types.Transaction, error) {
+	const maxAttempts = 30
+	var (
+		tx  *types.Transaction
+		err error
+	)
+	for i := 0; i < maxAttempts; i++ {
 		if m.closed.Load() {
 			return nil, ErrClosed
 		}
-		tx, err := m.craftTx(ctx, candidate)
-		if err != nil {
-			m.l.Warn("Failed to create a transaction, will retry", "err", err)
+		tx, err = m.craftTx(ctx, candidate)
+		if err == nil {
+			return tx, nil
 		}
-		return tx, err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create the tx: %w", err)
+		m.l.Warn("Failed to create a transaction, will retry", "err", err, "attempt", i+1)
+		if i == maxAttempts-1 {
+			break
+		}
+		delay := 2 * time.Second
+		if m.cfg.PrepareBackoff != nil {
+			delay = m.cfg.PrepareBackoff(i, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
 	}
-	return tx, nil
+	return nil, fmt.Errorf("failed to create the tx after %d attempts: %w", maxAttempts, err)
 }
 
 // craftTx creates the signed transaction
@@ -457,6 +484,15 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 			return nil, fmt.Errorf("failed to create blob transaction: %w", err)
 		}
 		txMessage = message
+	} else if m.cfg.UseLegacyTx {
+		// Legacy (type 0) transaction for chains that don't support EIP-1559
+		txMessage = &types.LegacyTx{
+			To:       candidate.To,
+			GasPrice: gasFeeCap, // Use gasFeeCap as the legacy gas price
+			Value:    candidate.Value,
+			Data:     candidate.TxData,
+			Gas:      candidate.GasLimit,
+		}
 	} else {
 		txMessage = &types.DynamicFeeTx{
 			ChainID:   m.chainID,
@@ -471,11 +507,34 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 	return m.signWithNextNonce(ctx, txMessage) // signer sets the nonce field of the tx
 }
 
+// isRevertError returns true if the error looks like an EVM contract revert.
+func isRevertError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// geth wraps revert data in an interface; if present it's definitely a revert
+	type errWithData interface{ ErrorData() interface{} }
+	var ed errWithData
+	if errors.As(err, &ed) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "execution reverted") || strings.Contains(s, "vm exception")
+}
+
+// wrapIfRevert wraps err in ContractRevertError when it looks like an EVM revert,
+// so the prepare() retry loop can apply a longer backoff.
+func wrapIfRevert(err error) error {
+	if isRevertError(err) {
+		return &ContractRevertError{Err: err}
+	}
+	return err
+}
+
 // estimateOrValidateCandidateTxGas either:
 // a) validates and returns the candidate.GasLimit (if set) using CallContract
 // b) estimates the gas limit using backend.EstimatGas and returns it.
 func (m *SimpleTxManager) estimateOrValidateCandidateTxGas(ctx context.Context, candidate TxCandidate, gasTipCap, gasFeeCap *big.Int, blobHashes []common.Hash, blobBaseFee *big.Int) (uint64, error) {
-	// Calculate the intrinsic gas for the transaction
 	callMsg := ethereum.CallMsg{
 		From:      m.cfg.From,
 		To:        candidate.To,
@@ -488,12 +547,11 @@ func (m *SimpleTxManager) estimateOrValidateCandidateTxGas(ctx context.Context, 
 		callMsg.BlobGasFeeCap = blobBaseFee
 		callMsg.BlobHashes = blobHashes
 	}
-	// If the gas limit is set, we can use that as the gas
 	if candidate.GasLimit == 0 {
 		callMsg.Gas = params.MaxTxGas
 		gas, err := m.backend.EstimateGas(ctx, callMsg)
 		if err != nil {
-			return 0, fmt.Errorf("failed to estimate gas: %w", errutil.TryAddRevertReason(err))
+			return 0, wrapIfRevert(fmt.Errorf("failed to estimate gas: %w", errutil.TryAddRevertReason(err)))
 		}
 		return gas, nil
 	}
@@ -501,7 +559,7 @@ func (m *SimpleTxManager) estimateOrValidateCandidateTxGas(ctx context.Context, 
 	callMsg.Gas = candidate.GasLimit
 	_, err := m.backend.CallContract(ctx, callMsg, nil)
 	if err != nil {
-		return 0, fmt.Errorf("failed to call: %w", errutil.TryAddRevertReason(err))
+		return 0, wrapIfRevert(fmt.Errorf("failed to call: %w", errutil.TryAddRevertReason(err)))
 	}
 	return candidate.GasLimit, nil
 }
@@ -649,6 +707,8 @@ func (m *SimpleTxManager) signWithNextNonce(ctx context.Context, txMessage types
 	}
 
 	switch x := txMessage.(type) {
+	case *types.LegacyTx:
+		x.Nonce = *m.nonce
 	case *types.DynamicFeeTx:
 		x.Nonce = *m.nonce
 	case *types.BlobTx:
@@ -830,7 +890,7 @@ func (m *SimpleTxManager) publishTx(ctx context.Context, tx *types.Transaction, 
 			l.Warn("resubmitted already known transaction", "err", err)
 			m.metr.TxPublished("tx_already_known")
 			return tx, true, nil
-		case errStringMatch(err, txpool.ErrReplaceUnderpriced):
+		case errStringMatch(err, txpool.ErrReplaceUnderpriced) || errContains(err, "gas price not enough to bump transaction"):
 			l.Warn("transaction replacement is underpriced", "err", err)
 			m.metr.TxPublished("tx_replacement_underpriced")
 			// retry tx with fee bump, unless we already just tried to bump them
@@ -1043,6 +1103,15 @@ func (m *SimpleTxManager) increaseGasPrice(ctx context.Context, tx *types.Transa
 			return nil, err
 		}
 		newTx = types.NewTx(message)
+	} else if tx.Type() == types.LegacyTxType {
+		newTx = types.NewTx(&types.LegacyTx{
+			Nonce:    tx.Nonce(),
+			To:       tx.To(),
+			GasPrice: bumpedFee, // Use gasFeeCap as legacy gas price
+			Value:    tx.Value(),
+			Data:     tx.Data(),
+			Gas:      gas,
+		})
 	} else {
 		newTx = types.NewTx(&types.DynamicFeeTx{
 			ChainID:   tx.ChainId(),
@@ -1255,6 +1324,11 @@ func errStringMatch(err, target error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), target.Error())
+}
+
+// errContains returns true if err is non-nil and err.Error() contains substr.
+func errContains(err error, substr string) bool {
+	return err != nil && strings.Contains(err.Error(), substr)
 }
 
 func errStringContainsAny(err error, targets []string) bool {

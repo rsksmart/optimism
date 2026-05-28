@@ -1,0 +1,61 @@
+# Out-of-tree forge package. We don't run upstream's full contracts-bedrock
+# build here — only our two source files (the splitter + the script). All
+# upstream source is reached through remappings into the optimism submodule.
+
+[profile.default]
+# Local source dir is named `contracts/` (not `src/`) so the `src/=...` remapping
+# below resolves into the upstream submodule rather than colliding with our
+# project root.
+src = 'contracts'
+script = 'script'
+out = 'forge-artifacts'
+
+# Match upstream's compiler so artifact ABIs / bytecode stay byte-identical.
+solc = '0.8.15'
+optimizer = true
+# Upstream forces optimizer_runs=5000 on every OPCM file via compilation_restrictions
+# (see optimism/packages/contracts-bedrock/foundry.toml). Mirror it here so the
+# splitter's transitive imports resolve to bytecode that matches the deployed
+# OPCM v2 family — otherwise we'd hit version mismatch reverts inside
+# OPContractsManagerUtils.upgrade()'s SemverComp checks.
+optimizer_runs = 5000
+
+extra_output = ['devdoc', 'userdoc', 'metadata', 'storageLayout']
+bytecode_hash = 'none'
+ast = true
+evm_version = 'cancun'
+
+# All transitive imports resolve into the upstream contracts-bedrock package
+# under the optimism submodule. Mirrors upstream's foundry.toml remappings
+# verbatim, just rebased onto the relative path from this package.
+remappings = [
+  '@openzeppelin/contracts-upgradeable/=../contracts-bedrock/lib/openzeppelin-contracts-upgradeable/contracts',
+  '@openzeppelin/contracts/=../contracts-bedrock/lib/openzeppelin-contracts/contracts',
+  '@openzeppelin/contracts-v5/=../contracts-bedrock/lib/openzeppelin-contracts-v5/contracts',
+  '@rari-capital/solmate/=../contracts-bedrock/lib/solmate',
+  '@lib-keccak/=../contracts-bedrock/lib/lib-keccak/contracts/lib',
+  '@solady/=../contracts-bedrock/lib/solady/src',
+  '@solady-v0.0.245/=../contracts-bedrock/lib/solady-v0.0.245/src',
+  'forge-std/=../contracts-bedrock/lib/forge-std/src',
+  'ds-test/=../contracts-bedrock/lib/forge-std/lib/ds-test/src',
+  'safe-contracts/=../contracts-bedrock/lib/safe-contracts/contracts',
+  'kontrol-cheatcodes/=../contracts-bedrock/lib/kontrol-cheatcodes/src',
+  'interfaces/=../contracts-bedrock/interfaces',
+  'src/=../contracts-bedrock/src',
+  'scripts/=../contracts-bedrock/scripts',
+]
+
+# IMPORTANT: forge by default treats anything in `src/` and the *project's*
+# `lib/` as a compile target. Without this, transitively-imported upstream
+# files would be considered project sources and might trip on missing files
+# under our root. The auto_detect_remappings flag is harmless but explicit.
+auto_detect_remappings = false
+
+# Allow solc to read source files outside this project root (specifically the
+# upstream contracts-bedrock tree under the optimism/ submodule). Without this
+# flag, solc's built-in --allow-paths sandbox rejects the cross-package imports
+# the remappings above resolve to.
+allow_paths = ['../contracts-bedrock']
+
+# Keep upstream's lint relaxation (matches optimism foundry.toml [profile.default]).
+deny = "never"

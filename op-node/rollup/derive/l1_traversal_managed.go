@@ -2,9 +2,11 @@ package derive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -108,6 +110,15 @@ func (l1t *L1TraversalManaged) ProvideNextL1(ctx context.Context, nextL1 eth.L1B
 	// If this fails, the caller will just have to ProvideNextL1 again (triggered by revisiting the exhausted-L1 signal).
 	_, receipts, err := l1t.l1Blocks.FetchReceipts(ctx, nextL1.Hash)
 	if err != nil {
+		// If the block was not found, it was likely reorged out between when the caller
+		// fetched the block ref and when we tried to get receipts. Signal a reset so
+		// the pipeline re-derives from a consistent L1 state instead of retrying a stale hash.
+		if errors.Is(err, ethereum.NotFound) {
+			l1t.log.Warn("L1 block not found during receipt fetch, likely reorged out",
+				"block", nextL1, "parent", nextL1.ParentID())
+			return NewResetError(fmt.Errorf("L1 block %s not found during receipt fetch (likely reorged): %w",
+				nextL1, err))
+		}
 		return NewTemporaryError(fmt.Errorf("failed to fetch receipts of L1 block %s (parent: %s) for L1 sysCfg update: %w",
 			nextL1, nextL1.ParentID(), err))
 	}

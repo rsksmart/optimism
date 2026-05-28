@@ -73,6 +73,17 @@ func (l1t *L1Traversal) AdvanceL1Block(ctx context.Context) error {
 	// Parse L1 receipts of the given block and update the L1 system configuration
 	_, receipts, err := l1t.l1Blocks.FetchReceipts(ctx, nextL1Origin.Hash)
 	if err != nil {
+		// If the block was not found, it may have been reorged out between the L1BlockRefByNumber
+		// call and this FetchReceipts call. Re-fetch by number to check for a hash change.
+		if errors.Is(err, ethereum.NotFound) {
+			refetched, refetchErr := l1t.l1Blocks.L1BlockRefByNumber(ctx, nextL1Origin.Number)
+			if refetchErr == nil && refetched.Hash != nextL1Origin.Hash {
+				l1t.log.Warn("L1 reorg detected: block hash changed between ref fetch and receipt fetch",
+					"number", nextL1Origin.Number, "original_hash", nextL1Origin.Hash, "new_hash", refetched.Hash)
+				return NewResetError(fmt.Errorf("L1 reorg detected at block %d: hash changed from %s to %s",
+					nextL1Origin.Number, nextL1Origin.Hash, refetched.Hash))
+			}
+		}
 		return NewTemporaryError(fmt.Errorf("failed to fetch receipts of L1 block %s (parent: %s) for L1 sysCfg update: %w", nextL1Origin, origin, err))
 	}
 	if err := UpdateSystemConfigWithL1Receipts(&l1t.sysCfg, receipts, l1t.cfg, nextL1Origin.Time); err != nil {

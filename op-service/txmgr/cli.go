@@ -51,6 +51,7 @@ const (
 	BlobTipCapDynamicFlagName          = "txmgr.blob-tip-cap-dynamic"
 	BlobTipCapPercentileFlagName       = "txmgr.blob-tip-cap-percentile"
 	BlobTipCapRangeFlagName            = "txmgr.blob-tip-cap-range"
+	UseLegacyTxFlagName                = "txmgr.use-legacy-tx"
 )
 
 var (
@@ -311,6 +312,11 @@ func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Fl
 			EnvVars: prefixEnvVars("TXMGR_CELL_PROOF_TIME"),
 			Value:   defaults.CellProofTime,
 		},
+		&cli.BoolFlag{
+			Name:    UseLegacyTxFlagName,
+			Usage:   "Force legacy (type 0) transactions instead of EIP-1559 (type 2). Required for L1 chains that don't support EIP-1559.",
+			EnvVars: prefixEnvVars("TXMGR_USE_LEGACY_TX"),
+		},
 	}, opsigner.CLIFlags(envPrefix, "")...)
 }
 
@@ -340,9 +346,22 @@ type CLIConfig struct {
 	TxNotInMempoolTimeout      time.Duration
 	AlreadyPublishedCustomErrs []string
 	CellProofTime              uint64
+	// GasPriceEstimatorFn overrides the default gas price estimator.
+	// Useful for L1 chains that don't support EIP-4844 (eth_blobBaseFee) or EIP-1559 (eth_maxPriorityFeePerGas).
+	GasPriceEstimatorFn GasPriceEstimatorFn
+	// UseLegacyTx forces the txmgr to create legacy (type 0) transactions instead of EIP-1559 (type 2).
+	// Required for L1 chains that don't support EIP-1559 transaction types (e.g. RSK).
+	UseLegacyTx       bool
 	BlobTipCapDynamic          bool
 	BlobTipCapPercentile       int
 	BlobTipCapRange            int
+	// WrapBackend optionally wraps the resolved L1 ETHBackend before it is
+	// installed on Config (e.g. with a rate-limiting decorator). nil means no
+	// wrap. Used by non-Ethereum L1 forks that need to throttle requests; the
+	// concrete wrapper lives outside this package.
+	WrapBackend func(ETHBackend) ETHBackend
+	// PrepareBackoff is forwarded to Config.PrepareBackoff. See its docs there.
+	PrepareBackoff func(attempt int, err error) time.Duration
 }
 
 func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
@@ -461,6 +480,7 @@ func ReadCLIConfig(ctx cliiface.Context) CLIConfig {
 		BlobTipCapDynamic:          ctx.Bool(BlobTipCapDynamicFlagName),
 		BlobTipCapPercentile:       ctx.Int(BlobTipCapPercentileFlagName),
 		BlobTipCapRange:            ctx.Int(BlobTipCapRangeFlagName),
+		UseLegacyTx:                ctx.Bool(UseLegacyTxFlagName),
 	}
 }
 
@@ -528,8 +548,13 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 
 	cellProofTime := fallbackToOsakaCellProofTimeIfKnown(chainID, cfg.CellProofTime)
 
+	var backend ETHBackend = l1
+	if cfg.WrapBackend != nil {
+		backend = cfg.WrapBackend(backend)
+	}
+
 	res := Config{
-		Backend: l1,
+		Backend: backend,
 		ChainID: chainID,
 		Signer:  signerFactory(chainID),
 		From:    from,
@@ -544,6 +569,9 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		SafeAbortNonceTooLowCount:  cfg.SafeAbortNonceTooLowCount,
 		AlreadyPublishedCustomErrs: cfg.AlreadyPublishedCustomErrs,
 		CellProofTime:              cellProofTime,
+		GasPriceEstimatorFn:        cfg.GasPriceEstimatorFn,
+		UseLegacyTx:                cfg.UseLegacyTx,
+		PrepareBackoff:             cfg.PrepareBackoff,
 	}
 
 	if cfg.BlobTipCapDynamic {
@@ -668,12 +696,21 @@ type Config struct {
 	// If nil, DefaultGasPriceEstimatorFn is used.
 	GasPriceEstimatorFn GasPriceEstimatorFn
 
+	// UseLegacyTx forces legacy (type 0) transactions instead of EIP-1559 (type 2).
+	UseLegacyTx bool
+
 	// List of custom RPC error messages that indicate that a transaction has
 	// already been published.
 	AlreadyPublishedCustomErrs []string
 
 	// CellProofTime is the time at which cell proofs are enabled in blob transaction (for Fusaka (EIP-7742) compatibility).
 	CellProofTime uint64
+
+	// PrepareBackoff returns the delay to wait between prepare() retry
+	// attempts (e.g. when craftTx fails). nil = constant 2s. Used by
+	// non-Ethereum L1 forks to back off at L1-block pace on contract reverts;
+	// the concrete strategy lives outside this package.
+	PrepareBackoff func(attempt int, err error) time.Duration
 
 	// BlobTipCapDynamic enables dynamic blob tip cap from the blob tip oracle
 	// instead of using static tip cap for blob transactions.
