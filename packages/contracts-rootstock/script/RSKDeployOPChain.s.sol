@@ -82,6 +82,18 @@ contract RSKDeployOPChain is Script {
         IDelayedWETH delayedWETHPermissionlessGameProxy;
     }
 
+    /// @notice ABI-bytes entry point mirroring upstream `DeployOPChain.runWithBytes`.
+    ///         Lets op-deployer's `forge.NewScriptCaller` invoke `runSplit`
+    ///         through the same `BytesScriptEncoder`/`BytesScriptDecoder`
+    ///         pair it uses for the upstream script — no parallel broadcast
+    ///         parser on the Go side.
+    function runWithBytes(bytes memory _input) public returns (bytes memory) {
+        require(_input.length > 0, "RSKDeployOPChain: input cannot be empty");
+        Types.DeployOPChainInput memory input = abi.decode(_input, (Types.DeployOPChainInput));
+        Output memory output_ = runSplit(input);
+        return abi.encode(output_);
+    }
+
     /// @notice Drop-in replacement for upstream `DeployOPChain.run(input)`,
     ///         except the single `OPContractsManagerV2.deploy(config)` call
     ///         is replaced by a splitter deploy + 5 stage broadcasts.
