@@ -40,6 +40,14 @@ type KeyedBroadcasterOpts struct {
 	Client  *ethclient.Client
 	Signer  opcrypto.SignerFn
 	From    common.Address
+
+	// TxMgrConfigHook, when non-nil, is called with the assembled txmgr.Config
+	// after defaults are applied but before NewSimpleTxManagerFromConfig is
+	// invoked. Downstreams use it to inject chain-specific overrides such as
+	// UseLegacyTx, GasPriceEstimatorFn, AlreadyPublishedCustomErrs,
+	// PrepareBackoff, or to swap Backend with a wrapped client. Backward
+	// compatible: nil leaves behavior unchanged.
+	TxMgrConfigHook func(*txmgr.Config)
 }
 
 func NewKeyedBroadcaster(cfg KeyedBroadcasterOpts) (*KeyedBroadcaster, error) {
@@ -72,6 +80,10 @@ func NewKeyedBroadcaster(cfg KeyedBroadcasterOpts) (*KeyedBroadcaster, error) {
 	mgrCfg.FeeLimitThreshold.Store(big.NewInt(100))
 	mgrCfg.MinTipCap.Store(minTipCap)
 	mgrCfg.MinBaseFee.Store(minBaseFee)
+
+	if cfg.TxMgrConfigHook != nil {
+		cfg.TxMgrConfigHook(mgrCfg)
+	}
 
 	mgr, err := txmgr.NewSimpleTxManagerFromConfig(
 		"transactor",
