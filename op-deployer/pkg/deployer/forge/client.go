@@ -28,6 +28,12 @@ type Client struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	Wd     string
+
+	// ExtraScriptOpts are appended to every `forge script` invocation
+	// before the trailing script-path + arg. Downstreams (e.g. RSK, which
+	// runs against a pre-EIP-1559 L1 and needs `--legacy`) populate this
+	// without forcing every Deploy*ViaForge callsite to learn new fields.
+	ExtraScriptOpts []string
 }
 
 func NewStandardClient(workdir string) (*Client, error) {
@@ -117,6 +123,7 @@ func (c *Client) RunScript(ctx context.Context, script string, sig string, args 
 	buf := new(bytes.Buffer)
 	cliOpts := []string{"script"}
 	cliOpts = append(cliOpts, opts...)
+	cliOpts = append(cliOpts, c.ExtraScriptOpts...)
 	cliOpts = append(cliOpts, "--sig", sig, script, "0x"+hex.EncodeToString(args))
 	if err := c.execCmd(ctx, buf, io.Discard, cliOpts...); err != nil {
 		return "", fmt.Errorf("failed to execute forge script: %w", err)
