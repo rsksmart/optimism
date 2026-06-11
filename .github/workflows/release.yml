@@ -1,0 +1,89 @@
+name: release
+
+on:
+  push:
+    tags:
+      - '*/v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse tag
+        id: tag
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"
+          component="${ref%%/*}"
+          version="${ref#*/}"
+          case "$component" in
+            op-node|op-batcher|op-proposer|op-deployer) ;;
+            *)
+              echo "Component '$component' is not configured for releases; skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.tag.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Compute build metadata
+        if: steps.tag.outputs.skip != 'true'
+        id: meta
+        run: |
+          echo "git_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "git_date=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        if: steps.tag.outputs.skip != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        if: steps.tag.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.tag.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        if: steps.tag.outputs.skip != 'true'
+        uses: docker/bake-action@v5
+        with:
+          files: ./docker-bake.hcl
+          targets: ${{ steps.tag.outputs.component }}
+          push: true
+          set: |
+            *.platform=linux/amd64,linux/arm64
+        env:
+          REGISTRY: ghcr.io
+          REPOSITORY: ${{ github.repository_owner }}
+          IMAGE_TAGS: ${{ steps.tag.outputs.version }}
+          GIT_VERSION: ${{ steps.tag.outputs.version }}
+          GIT_COMMIT: ${{ steps.meta.outputs.git_commit }}
+          GIT_DATE: ${{ steps.meta.outputs.git_date }}
+          PLATFORMS: linux/amd64,linux/arm64
+
+      - name: Create GitHub Release
+        if: steps.tag.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.tag.outputs.ref }}
+          tag_name: ${{ steps.tag.outputs.ref }}
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.tag.outputs.version, '-') }}

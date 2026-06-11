@@ -119,6 +119,32 @@ contracts-bedrock-docker:
       -f docker-bake.hcl \
       contracts-bedrock
 
+# Builds and pushes a release image for a single component, mirroring .github/workflows/release.yml.
+# Usage: just release-build op-node v1.17.0-rsk.1 [linux/amd64,linux/arm64]
+# Set PUSH=1 to push to ghcr.io/<owner>/<component>; otherwise the image is loaded locally.
+[script('bash')]
+release-build component version platforms='linux/amd64,linux/arm64':
+  set -euo pipefail
+  case "{{component}}" in
+    op-node|op-batcher|op-proposer|op-deployer) ;;
+    *) echo "component '{{component}}' is not in the release whitelist" >&2; exit 1 ;;
+  esac
+  owner="${GHCR_OWNER:-$(git config --get remote.origin.url | sed -E 's#.*[:/]([^/]+)/[^/]+(\.git)?$#\1#')}"
+  output_flag="--load"
+  if [ "${PUSH:-0}" = "1" ]; then output_flag="--push"; fi
+  REGISTRY=ghcr.io \
+  REPOSITORY="$owner" \
+  IMAGE_TAGS="{{version}}" \
+  GIT_VERSION="{{version}}" \
+  GIT_COMMIT="$(git rev-parse HEAD)" \
+  GIT_DATE="$(git show -s --format='%ct')" \
+  PLATFORMS="{{platforms}}" \
+  docker buildx bake \
+      --progress plain \
+      $output_flag \
+      -f docker-bake.hcl \
+      {{component}}
+
 # Updates git submodules.
 submodules:
   git submodule update --init --recursive
