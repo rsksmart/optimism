@@ -1,0 +1,22 @@
+# Enforce Conventional Commits on PR titles. The repo squash-merges, so the PR
+# title becomes the commit on the base branch — this gates exactly what lands
+# on rsk/develop. (Only rsk/** bases; the develop/main upstream mirrors are
+# intentionally excluded.)
+name: rsk-pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [rsk/**]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-title:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to an immutable commit SHA for supply-chain safety.
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
