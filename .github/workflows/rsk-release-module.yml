@@ -1,9 +1,18 @@
-name: release
+# RSK per-MODULE release: build + push a single component image and cut a GitHub
+# Release when an annotated `rsk/<module>/vX.Y.Z` tag is pushed. The `rsk/`
+# prefix keeps RSK release tags in their own namespace so they never collide
+# with the `<module>/v*` tags inherited from upstream Optimism.
+#
+# For the common case — all components together at one fork version — use
+# `rsk-release.yml` (whole-fork: builds every image + tags `rsk/vX.Y.Z`). This
+# per-module path ships a single component on its own version. All RSK-own tags
+# live under `rsk/`: whole-fork `rsk/vX.Y.Z` + per-module `rsk/<module>/vX.Y.Z`.
+name: rsk-release-module
 
 on:
   push:
     tags:
-      - '*/v*'
+      - 'rsk/*/v*'
 
 permissions:
   contents: write
@@ -16,9 +25,10 @@ jobs:
       - name: Parse tag
         id: tag
         run: |
-          ref="${GITHUB_REF#refs/tags/}"
-          component="${ref%%/*}"
-          version="${ref#*/}"
+          ref="${GITHUB_REF#refs/tags/}"   # e.g. rsk/op-node/v1.2.3
+          rest="${ref#rsk/}"               # op-node/v1.2.3
+          component="${rest%%/*}"          # op-node
+          version="${rest#*/}"             # v1.2.3
           case "$component" in
             op-node|op-batcher|op-proposer|op-deployer) ;;
             *)
