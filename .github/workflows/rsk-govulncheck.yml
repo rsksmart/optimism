@@ -3,13 +3,17 @@
 # reaches, cutting the noise of unused-but-vulnerable transitive deps. It only
 # analyzes (no dependency edits) → zero divergence from upstream.
 #
+# NOT run on PRs: the Go deps are upstream-owned and lag behind their fixes until
+# we sync, so a PR gate would be red on ~every PR for issues unrelated to it.
+# Instead it runs weekly (+ on demand); a failing run notifies via GitHub's Actions
+# failure email. It's a monitor, not a merge gate. (If the weekly failure email
+# becomes noise, switch to SARIF -> code-scanning, which alerts only on NEW vulns.)
+#
 # Complements Dependabot: Dependabot (github-actions) keeps our workflow actions
 # patched; govulncheck watches the Go dependency tree for reachable CVEs.
 name: rsk-govulncheck
 
 on:
-  pull_request:
-    branches: [rsk/**]
   schedule:
     - cron: "0 6 * * 1"      # weekly, Monday 06:00 UTC
   workflow_dispatch:
