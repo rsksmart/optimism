@@ -1,3 +1,5 @@
+> ⚠️ **RSK fork.** Read **[AGENTS_rsk.md](AGENTS_rsk.md)** first — its rules override this file where they conflict (default branch is `rsk/develop`, PRs target the fork not upstream, etc.).
+
 # Optimism Monorepo
 
 This is the primary monorepo for the OP Stack, maintained by the Optimism Collective. The OP Stack is a decentralized software stack that powers Optimism and forms the backbone of blockchains like OP Mainnet and Base.
