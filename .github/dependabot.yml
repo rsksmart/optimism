@@ -29,14 +29,21 @@ updates:
         patterns:
           - "*"
 
-  # No version updates (limit 0). Present only to give go.mod *security* update
-  # PRs the chore(deps) title so they pass the rsk-pr-title check. Dormant until
-  # the org enables Dependabot security updates.
+  # Why we keep this entry even though it does NO version updates:
+  #   Dependabot has two independent PR systems — version updates (routine
+  #   freshness, configured here) and security updates (CVE fixes, driven by
+  #   Dependabot alerts). `open-pull-requests-limit` caps ONLY the first.
+  #   Per GitHub docs, security updates have a separate internal limit of 10 PRs
+  #   that this option cannot change — so limit: 0 turns OFF routine go.mod bumps
+  #   (we don't chase freshness on upstream-owned deps; they come via sync) while
+  #   CVE PRs still open. This entry's only job is to give those security PRs the
+  #   chore(deps) title so they pass the rsk-pr-title check. Dormant until the org
+  #   enables Dependabot security updates.
   - package-ecosystem: "gomod"
     directory: "/"                    # root Go module (deployed op-node/batcher/proposer/deployer)
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 0       # security updates only — no routine version bumps
+      interval: "weekly"             # required key; inert here (it sets version-update cadence, which is off)
+    open-pull-requests-limit: 0       # 0 = no version updates; security updates unaffected (separate 10-PR limit)
     commit-message:
-      prefix: "chore"                 # -> "chore(deps): ..." on security PRs (no cooldown: don't delay a CVE fix)
+      prefix: "chore"                 # -> "chore(deps): ..." on the security PRs (no cooldown: don't delay a CVE fix)
       include: "scope"
