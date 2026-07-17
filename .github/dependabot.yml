@@ -1,17 +1,14 @@
-# Dependabot for the RSK fork — github-actions only.
+# Dependabot for the RSK fork.
 #
-# Keeps the actions used in our workflows patched (we own them, so bumping them
-# doesn't diverge from upstream).
+# github-actions — routine version updates for the actions in our workflows
+# (we own them, so bumping them doesn't diverge from upstream).
 #
-# gomod / npm / contracts are deliberately NOT managed here: those deps are
-# upstream-owned and inherited via upstream sync — bumping them would diverge the
-# fork. Their CVEs are handled out-of-band:
-#   - detection: govulncheck (rsk-govulncheck.yml), reachability-based.
-#   - fixes: upstream sync, or a targeted manual patch if urgent.
-#   - Dependabot security updates (once the org enables alerts + security
-#     updates) open CVE PRs for go.mod automatically — no config needed here.
-#     (Those PRs use default titles, so re-add a minimal gomod entry then if you
-#     want them to pass the rsk-pr-title check.)
+# gomod — NO routine version updates (open-pull-requests-limit: 0; Go deps are
+# upstream-owned, inherited via upstream sync — bumping them here would diverge
+# the fork). This entry exists ONLY so Dependabot *security* updates for go.mod
+# inherit the chore(deps) title and pass the rsk-pr-title check. It stays dormant
+# until the org enables Dependabot alerts + security updates; detection meanwhile
+# is govulncheck (rsk-govulncheck.yml). Fixes: upstream sync or a targeted patch.
 #
 # Lives on rsk/develop (the default branch — Dependabot reads config from there)
 # and doubles as the RSK override if an upstream sync reintroduces upstream's own
@@ -31,3 +28,15 @@ updates:
       github-actions:                 # one grouped PR instead of one per action
         patterns:
           - "*"
+
+  # No version updates (limit 0). Present only to give go.mod *security* update
+  # PRs the chore(deps) title so they pass the rsk-pr-title check. Dormant until
+  # the org enables Dependabot security updates.
+  - package-ecosystem: "gomod"
+    directory: "/"                    # root Go module (deployed op-node/batcher/proposer/deployer)
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0       # security updates only — no routine version bumps
+    commit-message:
+      prefix: "chore"                 # -> "chore(deps): ..." on security PRs (no cooldown: don't delay a CVE fix)
+      include: "scope"
