@@ -1,0 +1,33 @@
+# Dependabot for the RSK fork — github-actions only.
+#
+# Keeps the actions used in our workflows patched (we own them, so bumping them
+# doesn't diverge from upstream).
+#
+# gomod / npm / contracts are deliberately NOT managed here: those deps are
+# upstream-owned and inherited via upstream sync — bumping them would diverge the
+# fork. Their CVEs are handled out-of-band:
+#   - detection: govulncheck (rsk-govulncheck.yml), reachability-based.
+#   - fixes: upstream sync, or a targeted manual patch if urgent.
+#   - Dependabot security updates (once the org enables alerts + security
+#     updates) open CVE PRs for go.mod automatically — no config needed here.
+#     (Those PRs use default titles, so re-add a minimal gomod entry then if you
+#     want them to pass the rsk-pr-title check.)
+#
+# Lives on rsk/develop (the default branch — Dependabot reads config from there)
+# and doubles as the RSK override if an upstream sync reintroduces upstream's own
+# dependabot.yml.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"                    # scans .github/workflows/
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 10                # wait 10 days after a release before proposing it (supply-chain safety)
+    commit-message:
+      prefix: "chore"                 # -> "chore(deps): ..." keeps titles Conventional-Commits compliant
+      include: "scope"
+    groups:
+      github-actions:                 # one grouped PR instead of one per action
+        patterns:
+          - "*"
