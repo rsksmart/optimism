@@ -1,0 +1,28 @@
+# Reachable-vulnerability scan (govulncheck). Unlike a manifest scan, it uses
+# call-graph reachability — it only fails on vulnerabilities the code actually
+# reaches, cutting the noise of unused-but-vulnerable transitive deps. It only
+# analyzes (no dependency edits) → zero divergence from upstream.
+#
+# Complements Dependabot: Dependabot (github-actions) keeps our workflow actions
+# patched; govulncheck watches the Go dependency tree for reachable CVEs.
+name: rsk-govulncheck
+
+on:
+  pull_request:
+    branches: [rsk/**]
+  schedule:
+    - cron: "0 6 * * 1"      # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      # SHA-pinned for supply-chain safety (v1 currently points here too).
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod   # track the repo's Go version
+          go-package: ./...
