@@ -6,7 +6,7 @@
 # gomod — NO routine version updates (open-pull-requests-limit: 0; Go deps are
 # upstream-owned, inherited via upstream sync — bumping them here would diverge
 # the fork). This entry exists ONLY so Dependabot *security* updates for go.mod
-# inherit the chore(deps) title and pass the rsk-pr-title check. It stays dormant
+# inherit a Conventional-Commits-compliant title (chore(deps)). It stays dormant
 # until the org enables Dependabot alerts + security updates; detection meanwhile
 # is govulncheck (rsk-govulncheck.yml). Fixes: upstream sync or a targeted patch.
 #
@@ -36,8 +36,8 @@ updates:
   #   Per GitHub docs, security updates have a separate internal limit of 10 PRs
   #   that this option cannot change — so limit: 0 turns OFF routine go.mod bumps
   #   (we don't chase freshness on upstream-owned deps; they come via sync) while
-  #   CVE PRs still open. This entry's only job is to give those security PRs the
-  #   chore(deps) title so they pass the rsk-pr-title check. Dormant until the org
+  #   CVE PRs still open. This entry's only job is to give those security PRs a
+  #   Conventional-Commits-compliant title (chore(deps)). Dormant until the org
   #   enables Dependabot security updates.
   - package-ecosystem: "gomod"
     directory: "/"                    # root Go module (deployed op-node/batcher/proposer/deployer)
