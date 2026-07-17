@@ -22,19 +22,18 @@ on:
     - cron: '30 2 * * 0,4'
   workflow_dispatch:
 
-# Default to read-only.
-permissions: read-all
+# Least-privilege, set once at the workflow level (single job — job-level perms
+# would replace, not merge, so no override to reason about).
+permissions:
+  security-events: write   # upload SARIF to code scanning
+  contents: read
+  actions: read
+  pull-requests: read
 
 jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write   # upload SARIF to code scanning
-      contents: read
-      actions: read
-      pull-requests: read
-
     steps:
       - name: "Checkout code"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
