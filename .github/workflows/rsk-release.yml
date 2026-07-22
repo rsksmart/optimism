@@ -41,9 +41,11 @@ jobs:
     steps:
       - name: Validate version
         id: v
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          v='${{ inputs.version }}'
+          v="$VERSION"
           # Enforce semver X.Y.Z with an optional pre-release suffix. Build
           # metadata (+meta) is deliberately rejected: this version becomes a
           # Docker image tag (IMAGE_TAGS below) and '+' is not a valid tag char.
@@ -61,12 +63,14 @@ jobs:
           submodules: recursive
 
       - name: Refuse to clobber an existing tag
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
         run: |
           set -euo pipefail
           # Tags were fetched by the checkout (fetch-depth: 0). Checking locally
           # avoids the API's ref-encoding quirks with the '/' in rsk/vX.Y.Z.
-          if git rev-parse -q --verify "refs/tags/${{ steps.v.outputs.tag }}" >/dev/null; then
-            echo "::error::tag ${{ steps.v.outputs.tag }} already exists"; exit 1
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG already exists"; exit 1
           fi
 
       - name: Compute build metadata
@@ -114,16 +118,18 @@ jobs:
       # Only after the images are pushed: create the annotated tag (tag object +
       # ref) so a tag always corresponds to already-published images.
       - name: Create annotated rsk/vX.Y.Z tag
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
         run: |
           set -euo pipefail
           sha=$(git rev-parse HEAD)
           tag_sha=$(gh api -X POST "repos/$REPO/git/tags" \
-            -f tag="${{ steps.v.outputs.tag }}" -f message="RSK fork release ${{ steps.v.outputs.tag }}" \
+            -f tag="$TAG" -f message="RSK fork release $TAG" \
             -f object="$sha" -f type=commit --jq .sha)
           gh api -X POST "repos/$REPO/git/refs" \
-            -f ref="refs/tags/${{ steps.v.outputs.tag }}" -f sha="$tag_sha" >/dev/null
-          echo "Released ${{ steps.v.outputs.tag }} at ${sha:0:12} (op-node, op-batcher, op-proposer, op-deployer)"
-          echo "### Released \`${{ steps.v.outputs.tag }}\` at \`${sha:0:12}\` — images: op-node, op-batcher, op-proposer, op-deployer" >> "$GITHUB_STEP_SUMMARY"
+            -f ref="refs/tags/$TAG" -f sha="$tag_sha" >/dev/null
+          echo "Released $TAG at ${sha:0:12} (op-node, op-batcher, op-proposer, op-deployer)"
+          echo "### Released \`$TAG\` at \`${sha:0:12}\` — images: op-node, op-batcher, op-proposer, op-deployer" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
