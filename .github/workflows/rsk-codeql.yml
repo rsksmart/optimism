@@ -1,0 +1,40 @@
+# Satisfies the `code_scanning` rule in the rsk-develop-protection ruleset,
+# which requires CodeQL results before merging into rsk/develop. Scoped to Go
+# for now (the repo's single root go.mod); Rust/JS coverage can be added later
+# as a follow-up without touching this bootstrap.
+name: rsk-codeql
+
+on:
+  pull_request:
+    branches: [rsk/**]
+  push:
+    branches: [rsk/develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # Pinned to an immutable commit SHA for supply-chain safety.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          languages: go
+          build-mode: autobuild
+
+      - uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          category: "/language:go"
