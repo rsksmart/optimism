@@ -76,6 +76,53 @@ wherever they conflict.** Read this before acting on anything in those files.
   RSK-only backoff to a tiny adapter, a ~3-line diff from upstream instead of a
   full rewrite (PAYROLLUP-87).
 
+## Testing RSK changes
+
+Upstream tests only guard untouched behavior; some RSK branches even make an
+upstream test path fail. Every RSK divergence must get its own test, and those
+tests must not collide with upstream on sync.
+
+- **New test files are suffixed `_rsk_test.go`** (e.g. `estimator_rsk_test.go`).
+  **Never add functions to an upstream `_test.go` file** — a fork-only file
+  can't conflict on merge; an added function in a shared file frequently does.
+- **Test functions are prefixed `TestRSK_`**; test-only helpers, mocks and
+  fixtures are **prefixed `rsk`** (e.g. `rskEstimatorBackend`) so they never
+  collide with upstream symbols in the shared package.
+- **Prefer the external test package** `package <pkg>_test` when testing the
+  exported API. Use the internal package **only** when the change is reachable
+  solely through unexported symbols (e.g. `EthClient`'s unexported hook fields
+  and `runHeaderVerify` / `runBlockVerify`, or the `txmgr` internal `craftTx`
+  harness). Internal and external `_test` files coexist in one directory.
+- **One `TestMain` per package** — don't add a second one in a `_rsk_test.go`.
+- **Assert the default path too**: every nil-defaulted RSK hook must preserve
+  standard Ethereum behavior, so cover both "nil ⇒ default" and "set ⇒ hook
+  invoked / overrides default".
+- **Keep tests hermetic** — no live RSK / forge / network. Reuse upstream test
+  seams (`testutils` mocks, `batching/test` stubs, `StaticBinary`); add a small
+  `rsk`-prefixed wrapper when a seam can't express what you need (e.g. injecting
+  an error into a multi-output contract call).
+
+Run a package's RSK tests with, e.g.:
+
+    go test ./op-service/txmgr/... -run 'TestRSK_' -v
+
+### RSK Go test coverage map
+
+| Area | RSK divergence | RSK test |
+| --- | --- | --- |
+| `op-service/txmgr/estimator.go` | pre-EIP-1559 `eth_gasPrice` fallback; "neither available" error | `estimator_rsk_test.go` |
+| `op-service/txmgr/{cli,txmgr}.go` | `UseLegacyTx` (type-0 tx), pluggable `GasPriceEstimatorFn` | `txmgr_rsk_test.go` |
+| `op-service/txmgr/metrics/tx_metrics.go` | nil-guarded fee gauges (nil base/blob fee) | `tx_metrics_rsk_test.go` |
+| `op-node/rollup/derive/l1_traversal{,_managed}.go` | reorg-aware receipt-fetch `NotFound` handling | `l1_traversal_rsk_test.go` |
+| `op-node/rollup/derive/l1_block_info.go` | nil L1 `BaseFee` ⇒ 0 (no panic) | `l1_block_info_rsk_test.go` |
+| `op-service/sources/{eth_client,receipts_rpc,types}.go` | pluggable block / header / receipts / tx-hash hooks | `eth_client_rsk_test.go` |
+| `op-deployer/pkg/deployer/broadcaster` | `TxMgrConfigHook` on `KeyedBroadcasterOpts` | `keyed_rsk_test.go` |
+| `op-deployer/pkg/deployer/forge` | `ExtraScriptOpts` on `Client` | `client_rsk_test.go` |
+| `op-proposer/contracts/disputegamefactory.go` | skip un-loadable games; surface ctx errors | `disputegamefactory_rsk_test.go` |
+
+When you add a new RSK divergence, add a row here and an `_rsk_test.go` beside
+the code.
+
 ## CI / workflows
 
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside
