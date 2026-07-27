@@ -1,0 +1,140 @@
+# Cut a GLOBAL (whole-fork) RSK release: build + push every deployable component
+# image at one fork version and create the annotated `rsk/vX.Y.Z` tag on the
+# chosen commit. This is the snapshot op_rsk pins via its `optimism` submodule
+# gitlink — all components from one commit, mutually compatible by construction
+# (the analog of upstream's global `vX.Y.Z`). Manual and deliberate: a release
+# is a decision, not something that happens on every merge.
+#
+# The tag is created here with GITHUB_TOKEN, which by design can't trigger a
+# separate on-push workflow (anti-recursion) — so the images are built in this
+# same run rather than by a downstream "on tag push" job.
+#
+# For shipping a SINGLE component on its own version, use `rsk-release-module.yml`
+# (`rsk/<module>/vX.Y.Z`). All RSK-own tags live under `rsk/`: whole-fork
+# `rsk/vX.Y.Z` + per-module `rsk/<module>/vX.Y.Z`.
+#
+# Run: Actions tab → "rsk-release" → Run workflow, or
+#   gh workflow run rsk-release.yml -f version=0.1.0 [-f ref=rsk/develop]
+name: rsk-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version X.Y.Z (builds all images at vX.Y.Z + creates tag rsk/vX.Y.Z; append -rc.N / -poc etc. for pre-releases)"
+        required: true
+      ref:
+        description: "Commit SHA or branch to release"
+        required: false
+        default: rsk/develop
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Validate version
+        id: v
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          v="$VERSION"
+          # Enforce semver X.Y.Z with an optional pre-release suffix. Build
+          # metadata (+meta) is deliberately rejected: this version becomes a
+          # Docker image tag (IMAGE_TAGS below) and '+' is not a valid tag char.
+          if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::version '$v' is not semver X.Y.Z[-prerelease]"; exit 1
+          fi
+          echo "version=v$v" >> "$GITHUB_OUTPUT"
+          echo "tag=rsk/v$v" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Refuse to clobber an existing tag
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Tags were fetched by the checkout (fetch-depth: 0). Checking locally
+          # avoids the API's ref-encoding quirks with the '/' in rsk/vX.Y.Z.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG already exists"; exit 1
+          fi
+
+      - name: Compute build metadata
+        id: meta
+        run: |
+          echo "git_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "git_date=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same component set as rsk-release-module.yml's allowlist, all built from
+      # the one checked-out commit so the images share a coherent fork version.
+      - name: Build and push all component images
+        uses: docker/bake-action@4a9a8d494466d37134e2bfca2d3a8de8fb2681ad # v5
+        with:
+          files: ./docker-bake.hcl
+          targets: |
+            op-node
+            op-batcher
+            op-proposer
+            op-deployer
+          push: true
+          set: |
+            *.platform=linux/amd64,linux/arm64
+        env:
+          REGISTRY: ghcr.io
+          REPOSITORY: ${{ github.repository_owner }}
+          IMAGE_TAGS: ${{ steps.v.outputs.version }}
+          GIT_VERSION: ${{ steps.v.outputs.version }}
+          GIT_COMMIT: ${{ steps.meta.outputs.git_commit }}
+          GIT_DATE: ${{ steps.meta.outputs.git_date }}
+          PLATFORMS: linux/amd64,linux/arm64
+
+      # Only after the images are pushed: create the annotated tag (tag object +
+      # ref) so a tag always corresponds to already-published images.
+      - name: Create annotated rsk/vX.Y.Z tag
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          tag_sha=$(gh api -X POST "repos/$REPO/git/tags" \
+            -f tag="$TAG" -f message="RSK fork release $TAG" \
+            -f object="$sha" -f type=commit --jq .sha)
+          gh api -X POST "repos/$REPO/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$tag_sha" >/dev/null
+          echo "Released $TAG at ${sha:0:12} (op-node, op-batcher, op-proposer, op-deployer)"
+          echo "### Released \`$TAG\` at \`${sha:0:12}\` — images: op-node, op-batcher, op-proposer, op-deployer" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: ${{ steps.v.outputs.tag }}
+          tag_name: ${{ steps.v.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.v.outputs.version, '-') }}

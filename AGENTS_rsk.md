@@ -62,6 +62,13 @@ wherever they conflict.** Read this before acting on anything in those files.
   upstream sync (a workflow upstream would call `foo.yml` we add as `rsk-foo.yml`).
 - Scope triggers to the RSK surface — e.g. `branches: [rsk/**]` /
   `tags: ['rsk/**']` — so upstream's `develop`/`main` mirrors aren't affected.
+- **Pin every third-party action to a full commit SHA**, with the version as a
+  trailing comment (`uses: actions/checkout@<sha> # v4`) — never a mutable tag
+  (`@v4`, `@main`). A tag can be repointed at malicious code; a commit SHA can't.
+  This is supply-chain hygiene and keeps OpenSSF Scorecard's `Pinned-Dependencies`
+  check green. Pinning doesn't mean going stale: the Dependabot `github-actions`
+  config bumps the SHAs (and their version comments). Resolve a tag to its SHA with
+  `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`.
 
 ## Syncing upstream (maintainers)
 
