@@ -25,6 +25,7 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/retry"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr/metrics"
 )
 
@@ -395,34 +396,48 @@ func (m *SimpleTxManager) SendAsync(ctx context.Context, candidate TxCandidate, 
 // other non-Ethereum L1s install a revert-aware strategy via that hook so
 // contract reverts back off at L1-block pace.
 func (m *SimpleTxManager) prepare(ctx context.Context, candidate TxCandidate) (*types.Transaction, error) {
-	const maxAttempts = 30
-	var (
-		tx  *types.Transaction
-		err error
-	)
-	for i := 0; i < maxAttempts; i++ {
+	var lastErr error
+	tx, err := retry.Do(ctx, 30, m.rskPrepareStrategy(&lastErr), func() (*types.Transaction, error) {
 		if m.closed.Load() {
+			lastErr = ErrClosed
 			return nil, ErrClosed
 		}
-		tx, err = m.craftTx(ctx, candidate)
-		if err == nil {
-			return tx, nil
+		tx, err := m.craftTx(ctx, candidate)
+		lastErr = err // exposes this attempt's error to the error-aware backoff strategy
+		if err != nil {
+			m.l.Warn("Failed to create a transaction, will retry", "err", err)
 		}
-		m.l.Warn("Failed to create a transaction, will retry", "err", err, "attempt", i+1)
-		if i == maxAttempts-1 {
-			break
-		}
-		delay := 2 * time.Second
-		if m.cfg.PrepareBackoff != nil {
-			delay = m.cfg.PrepareBackoff(i, err)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(delay):
-		}
+		return tx, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create the tx: %w", err)
 	}
-	return nil, fmt.Errorf("failed to create the tx after %d attempts: %w", maxAttempts, err)
+	return tx, nil
+}
+
+// rskErrAwareStrategy adapts an (attempt, err)->delay backoff to retry.Strategy.
+// retry.Do runs the op before Strategy.Duration on each attempt, so the delay
+// can depend on the error the op recorded into *lastErr. This lets prepare()
+// keep cfg.PrepareBackoff while delegating the retry loop (and its pre-attempt
+// ctx check) to retry.Do like upstream.
+type rskErrAwareStrategy struct {
+	backoff func(attempt int, err error) time.Duration
+	lastErr *error
+}
+
+func (s rskErrAwareStrategy) Duration(attempt int) time.Duration {
+	return s.backoff(attempt, *s.lastErr)
+}
+
+// rskPrepareStrategy picks the retry strategy for prepare(): the configured
+// error-aware PrepareBackoff when set (e.g. RSK's RevertAwareBackoff), else
+// upstream's plain fixed 2s. lastErr must point at the variable prepare()'s op
+// updates on each attempt.
+func (m *SimpleTxManager) rskPrepareStrategy(lastErr *error) retry.Strategy {
+	if m.cfg.PrepareBackoff == nil {
+		return retry.Fixed(2 * time.Second)
+	}
+	return rskErrAwareStrategy{backoff: m.cfg.PrepareBackoff, lastErr: lastErr}
 }
 
 // craftTx creates the signed transaction
