@@ -39,13 +39,8 @@ jobs:
           cache: true
 
       - name: Test RSK-divergent packages
-        # TEMPORARY: -skip TestQueue_Send/subsequent_txs_fail_after_tx_failure — a
-        # flaky data race in the fork's txmgr surfaced by this scoped test
-        # (a tx-send goroutine outlives queue.Wait() after a tx failure).
-        # Tracked in PAYROLLUP-87; remove this -skip once the txmgr fix lands.
         run: |
           go test -timeout 15m \
-            -skip 'TestQueue_Send/subsequent_txs_fail_after_tx_failure' \
             ./op-node/rollup/derive/... \
             ./op-node/node/... \
             ./op-service/sources/... \
