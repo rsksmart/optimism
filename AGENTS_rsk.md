@@ -36,6 +36,13 @@ wherever they conflict.** Read this before acting on anything in those files.
 - The PR **title** must follow Conventional Commits (`type(scope): summary`):
   feature PRs are squash-merged, so the title becomes the commit on
   `rsk/develop` (enforced by the PR-title check).
+- Because that title becomes the permanent commit, it must describe what the
+  **final diff actually does**, not the branch's original intent. Before
+  opening a PR, and again before marking it ready, re-read the diff and confirm
+  the title still fits. If the scope changed along the way (commits dropped,
+  work rebased out, or the goal narrowed), retitle it to match what actually
+  lands. A title that describes work no longer in the diff ships a misleading
+  commit onto `rsk/develop` and pollutes the changelog.
 
 ## Merge model
 
