@@ -54,6 +54,21 @@ wherever they conflict.** Read this before acting on anything in those files.
 - Prefer adding RSK logic to **opRSK** over patching upstream files here — it
   keeps the fork thin and upstream syncs clean.
 
+## Patch style: stay close to upstream
+
+- When you must patch an upstream file, prefer the change that stays **closest
+  to upstream** over a bespoke local rewrite. Reuse upstream's own helpers, keep
+  the diff minimal, and don't re-implement what upstream already does. A smaller,
+  upstream-shaped patch conflicts far less on the next sync.
+- If a simpler approach lines up with upstream, take it, even if a hand-rolled
+  version feels marginally cleaner in isolation. Isolate the unavoidable
+  RSK-specific bits so the upstream-mirrored logic stays recognizable.
+- Example: `op-service/txmgr` `prepare()` had been re-hand-rolled as a manual
+  retry loop, which drifted from upstream and dropped a pre-attempt `ctx` check
+  (a data race). The fix put it back on upstream's `retry.Do` and confined the
+  RSK-only backoff to a tiny adapter, a ~3-line diff from upstream instead of a
+  full rewrite (PAYROLLUP-87).
+
 ## CI / workflows
 
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside
