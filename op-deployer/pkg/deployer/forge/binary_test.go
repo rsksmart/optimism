@@ -52,6 +52,10 @@ func TestStandardBinary_ForgeBins(t *testing.T) {
 }
 
 func TestStandardBinary_Downloads(t *testing.T) {
+	// Clear out the PATH env var so the standard forge on PATH (v1.2.3 in CI)
+	// can't satisfy Ensure() before the download path under test is reached.
+	t.Setenv("PATH", "")
+
 	expChecksum, err := os.ReadFile("testdata/foundry.tgz.sha256")
 	require.NoError(t, err)
 
