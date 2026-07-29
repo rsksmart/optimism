@@ -3,6 +3,7 @@
 # upstream source is reached through remappings into the optimism submodule.
 
 [profile.default]
+fs_permissions = [{ access = 'read', path = './forge-artifacts/' }]
 # Local source dir is named `contracts/` (not `src/`) so the `src/=...` remapping
 # below resolves into the upstream submodule rather than colliding with our
 # project root.
