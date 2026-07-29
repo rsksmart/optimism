@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import {IOPContractsManagerUtils} from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import {IProxyAdmin} from "interfaces/universal/IProxyAdmin.sol";
 import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
-import {ISuperchainConfig} from "interfaces/L1/ISuperchainConfig.sol";
 import {Features} from "src/libraries/Features.sol";
 import {GameTypes} from "src/dispute/lib/Types.sol";
 
@@ -169,6 +167,7 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
     function test_invalidGameConfigs_startingTypeDisabled_revertsAndLeavesPhase() public {
         _startAtStep2();
         fullConfig.disputeGameConfigs[1].enabled = false;
+        fullConfig.disputeGameConfigs[1].initBond = 0;
 
         vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);

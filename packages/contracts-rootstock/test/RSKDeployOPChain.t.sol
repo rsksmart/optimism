@@ -45,7 +45,7 @@ contract RSKDeployOPChain_Test is RSKOPCTestBase {
 
     function test_runWithBytes_malformedInput_reverts() public {
         RSKDeployOPChain script = new RSKDeployOPChain();
-        vm.expectRevert();
+        vm.expectRevert(bytes(""));
         script.runWithBytes(bytes("malformed"));
     }
 
