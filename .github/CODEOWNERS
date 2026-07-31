@@ -1,0 +1,4 @@
+# Every PR requests a review from the PayRollup team. The team's code review
+# assignment (load balance, 1 reviewer) then routes it to a single member, so
+# review stays shared across the squad instead of being split by path.
+* @rsksmart/payrollup
