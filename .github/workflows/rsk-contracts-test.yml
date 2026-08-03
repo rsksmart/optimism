@@ -99,7 +99,7 @@ jobs:
       - name: Show forge version
         run: |
           forge --version
-          forge --version | grep -q '1\.2\.3' || {
+          forge --version | grep -Eq '(^|[^0-9])1\.2\.3([^0-9]|$)' || {
             echo "::error::expected Foundry 1.2.3 (see mise.toml and op-deployer/pkg/deployer/forge/version.json)"
             exit 1
           }
