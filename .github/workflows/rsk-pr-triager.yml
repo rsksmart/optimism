@@ -1,0 +1,296 @@
+# PR triager. Adds `risk/high` when a PR looks risky, in two additive layers: the
+# path floor in .github/rsk-pr-triager.yml, then a Copilot verdict when the floor did
+# not already fire. Neither layer ever removes a label.
+#
+# `triaged` means this revision was assessed, not that the model ran. Its absence
+# means no assessment happened, which is not the same as safe.
+#
+# Who reviews a PR is not decided here: see .github/CODEOWNERS.
+#
+# Ported from rsksmart/rootstack. This being a fork, the path list means the
+# upstream files the fork patches rather than directories it owns.
+name: rsk-pr-triager
+
+# pull_request_target so the workflow, the prompt and the path list are read from
+# the base branch. Under `pull_request` a PR could weaken the criteria it is
+# judged by. The hazard of this trigger is running PR code with a write token, so
+# keep it that way: do not add a `ref:` to the checkout below, and do not execute
+# anything from the PR's tree. The diff is read through the API on purpose.
+#
+# Weakening that takes a reviewed merge, not a PR: only the base branch's copy of
+# this file ever runs, and a PR touching it is flagged risk/high by the path list.
+on:
+  pull_request_target:
+    branches: [rsk/**]
+    # edited because a base-branch change replaces the whole diff without firing
+    # synchronize. ready_for_review is a safety net for a draft whose runs all
+    # failed, since marking it ready is the point where the label starts mattering.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions: read-all
+
+# Newest run wins. Overlapping runs would let an older one re-add `triaged` after
+# a newer one cleared it, advertising the current revision as assessed.
+concurrency:
+  group: rsk-pr-triager-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # Drafts run too. Skipping them meant a PR converted back to draft kept the
+    # `triaged` from its previous revision, since the step that clears it was
+    # inside the skipped job, so the label claimed an assessment that never
+    # happened. Running is also simpler than clearing the label from a second job.
+    #
+    # Forks are skipped because GitHub does not downgrade the token under
+    # pull_request_target. Such a PR gets no `triaged`, which reads as "not
+    # assessed", and that is accurate.
+    #
+    # Dependabot is skipped for the opposite reason: GitHub does run its events in
+    # the Dependabot context with a read-only token, so the label writes below
+    # would fail and leave a red check on every dependency bump. Keyed on the
+    # actor, not the PR author, because that is what the token follows: if someone
+    # pushes to a Dependabot branch themselves, triage resumes and works.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    # Job permissions replace the workflow ones rather than merging, so
+    # contents: read is repeated here.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # Must precede the labeler: nothing here creates a missing label, so on a
+      # repo without them the first run would fail wherever it hit one. `triaged`
+      # is cleared because it is per revision, re-applied once a verdict exists.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh label create risk/high --repo "$REPO" --color b60205 --description "Touches a sensitive area; review carefully" --force
+          gh label create triaged  --repo "$REPO" --color 0e8a16 --description "This revision was risk-triaged" --force
+
+          # Read first, remove only if present. `gh pr edit --remove-label` also
+          # exits 1 when the label is simply absent, so the `|| true` this
+          # replaces could not tell that apart from a real failure: a transient
+          # one left the previous revision's `triaged` in place while the run
+          # carried on. Failing loudly is better, because the alternative is a
+          # label claiming an assessment that did not happen.
+          labels=$(gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name')
+          if printf '%s\n' "$labels" | grep -qx "triaged"; then
+            gh pr edit "$PR" --repo "$REPO" --remove-label "triaged"
+          fi
+
+      - id: labeler
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          configuration-path: .github/rsk-pr-triager.yml
+          sync-labels: false
+
+      - id: floor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name' | grep -qx "risk/high"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "path floor already flagged this PR; skipping the model call"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Base branch, for the prompt file only. persist-credentials: false keeps
+      # the token out of .git/config on the runner.
+      - if: steps.floor.outputs.already == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/prompts
+
+      # provider: copilot spawns the `copilot` CLI, so node and the CLI are needed.
+      - if: steps.floor.outputs.already == 'false'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.18.0
+
+      - if: steps.floor.outputs.already == 'false'
+        run: npm install --global --ignore-scripts @github/copilot@1.0.76
+
+      - id: context
+        if: steps.floor.outputs.already == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          ctx="$RUNNER_TEMP/pr-context.txt"
+          raw="$RUNNER_TEMP/pr.diff"
+          # GitHub refuses to render a diff past its own size limits, so this can
+          # fail on exactly the largest PRs. Reported instead of killing the job,
+          # because the next step treats an unreadable diff as high risk, which is
+          # what the prompt would have answered anyway.
+          if ! gh pr diff "$PR" --repo "$REPO" > "$raw"; then
+            echo "::warning::could not fetch the diff; treating this PR as high risk"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "why=unavailable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "Title: $(gh pr view "$PR" --repo "$REPO" --json title -q .title)"
+            echo
+            echo "Changed files:"
+            gh pr view "$PR" --repo "$REPO" --json files -q '.files[] | "  \(.path) (+\(.additions)/-\(.deletions))"'
+            echo
+            echo "Diff:"
+            cat "$raw"
+          } > "$ctx"
+
+          # The whole prompt has to fit in one argv element: actions/ai-inference
+          # builds `['-p', systemPrompt + "\n\n" + context]` and hands it to spawn,
+          # so execve applies MAX_ARG_STRLEN = 32 * PAGE_SIZE = 131072 bytes to that
+          # single argument. Over it execve fails with E2BIG, continue-on-error
+          # swallows that, and the PR ends up with no verdict at all.
+          #
+          # Measuring the system prompt rather than hardcoding its size, so the
+          # budget follows it if someone makes it longer. Everything is counted,
+          # not just the diff: a PR with hundreds of changed paths grows the file
+          # list above too.
+          #
+          # Nothing is truncated to fit. A partial diff cannot be judged, and
+          # leaving that to a sentence in the prompt would mean trusting the model
+          # to notice and to be conservative about it. The next step applies
+          # risk/high instead, which is the answer for a change this size anyway.
+          budget=$(( 131072 - 8192 - $(wc -c < .github/prompts/rsk-pr-risk.md) ))
+          size=$(wc -c < "$ctx")
+          if [ "$size" -gt "$budget" ]; then
+            echo "::warning::context is $size bytes against a $budget budget; treating this PR as high risk"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "why=toobig" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "context is $size bytes, budget $budget"
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "file=$ctx" >> "$GITHUB_OUTPUT"
+
+      # continue-on-error so a Copilot outage leaves the PR untriaged instead of
+      # failing the check.
+      - id: verdict
+        if: steps.floor.outputs.already == 'false' && steps.context.outputs.ok == 'true'
+        continue-on-error: true
+        uses: actions/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222 # v3
+        with:
+          provider: copilot
+          # Empty on purpose. The action defaults to gpt-4.1, which this org's
+          # Copilot subscription does not offer, so the CLI exits 1. Empty means
+          # the CLI picks its own default, which the subscription always has.
+          model: ""
+          system-prompt-file: .github/prompts/rsk-pr-risk.md
+          prompt-file: ${{ steps.context.outputs.file }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ALREADY_HIGH: ${{ steps.floor.outputs.already }}
+          DIFF_OK: ${{ steps.context.outputs.ok }}
+          DIFF_WHY: ${{ steps.context.outputs.why }}
+          VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
+          VERDICT: ${{ steps.verdict.outputs.response }}
+        run: |
+          set -euo pipefail
+
+          MARKER='<!-- pr-triage -->'
+
+          upsert() {
+            # printf rather than a multi-line string: the string form is correct,
+            # since YAML dedents this block, but it reads as if the indentation
+            # ends up in the comment and three reviewers in a row said so.
+            body=$(printf '%s\n%s' "$MARKER" "$1")
+            # Author as well as marker: the marker says which comment, not whose.
+            # Without this, a comment seeded with the marker gets edited instead,
+            # leaving the verdict under someone else's name and editable by them.
+            id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+              -q ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | head -1)
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$body" >/dev/null
+            else
+              gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+            fi
+          }
+
+          if [ "$ALREADY_HIGH" = "true" ]; then
+            echo "risk/high already present; skipping the model call"
+            upsert "**PR Triager kept \`risk/high\`.** It was already set, so the model was not consulted again for this revision. It came either from a path listed in \`.github/rsk-pr-triager.yml\` or from an earlier revision's assessment."
+            gh pr edit "$PR" --repo "$REPO" --add-label "triaged"
+            exit 0
+          fi
+
+          # Reaching here means the floor did not fire, so the context step ran.
+          # Either way below, the change could not be seen whole, and this decides
+          # that rather than asking the model to be careful about it.
+          if [ "$DIFF_OK" != "true" ]; then
+            case "$DIFF_WHY" in
+              toobig) why="it does not fit in one model prompt" ;;
+              *)      why="GitHub would not return the diff, which usually means the same thing" ;;
+            esac
+            gh pr edit "$PR" --repo "$REPO" --add-label "risk/high"
+            upsert "**PR Triager decided \`risk/high\`** without reading the diff, because $why. Nothing was inspected, so treat this as unassessed rather than assessed as risky."
+            gh pr edit "$PR" --repo "$REPO" --add-label "triaged"
+            exit 0
+          fi
+
+          if [ "$VERDICT_OUTCOME" != "success" ]; then
+            echo "::warning::the model step did not succeed; leaving the PR untriaged"
+            upsert "**PR Triager did not decide.** The risk check could not run for this revision, so the absence of \`risk/high\` here means nothing was checked, not that the change is safe."
+            exit 0
+          fi
+
+          # The model's text never becomes a label name. Anything but the two
+          # known words is treated as the cautious answer, not ignored.
+          verdict=$(printf '%s' "${VERDICT:-}" | head -1 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+          case "$verdict" in
+            high) ;;
+            low)  ;;
+            *)
+              echo "::warning::unexpected verdict '${VERDICT:-}', treating as high"
+              verdict=high
+              ;;
+          esac
+
+          # Display-only, and untrusted: it comes from the model reading the PR.
+          # The allow-list is what keeps ` and $ away from the shell, and the code
+          # span it is printed in below is what keeps it from rendering as a link,
+          # since GFM does not autolink inside one and the backtick needed to
+          # break out is already gone. Enumerating markdown and autolink forms
+          # instead does not work: a bare www. string is enough, in any case.
+          # The defang is only for notification emails, which are not GFM.
+          reason=$(printf '%s' "${VERDICT:-}" | tail -n +2 | tr '\n' ' ' \
+            | tr -cd "A-Za-z0-9 ,.:;/()_'-" \
+            | sed -E 's,[Hh][Tt][Tt][Pp][Ss]?://,hxxp://,g; s,[Ww][Ww][Ww]\.,wxw.,g; s/ +/ /g; s/^ +//; s/ +$//' \
+            | cut -c1-300)
+          [ -n "$reason" ] || reason="(the model gave no reason)"
+
+          echo "verdict: $verdict"
+          echo "reason:  $reason"
+
+          if [ "$verdict" = "high" ]; then
+            gh pr edit "$PR" --repo "$REPO" --add-label "risk/high"
+            upsert "**PR Triager decided \`risk/high\`** from reading the diff: \`$reason\`"
+          else
+            # No risk/low label exists, so the message says it in words.
+            upsert "**PR Triager decided this is low risk** from reading the diff: \`$reason\`. No label is added for this; low risk is \`triaged\` without \`risk/high\`."
+          fi
+          gh pr edit "$PR" --repo "$REPO" --add-label "triaged"
