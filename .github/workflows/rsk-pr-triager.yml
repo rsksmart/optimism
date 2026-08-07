@@ -1,0 +1,192 @@
+# PR triager. Labels a PR `risk/high` when it looks risky, in two layers:
+#
+#   1. actions/labeler flags the sensitive paths listed in .github/pr-triager.yml.
+#      Deterministic, and the list is versioned and reviewable.
+#   2. When that floor did not already flag it, Copilot reads the diff and gives
+#      a one-word verdict. Only the verdict comes from the model: this workflow
+#      decides what that means and writes the label names itself, so the model's
+#      whole influence is one of two words, validated below before use.
+#
+# Finally it adds `triaged`, which is the signal that the model step actually
+# ran. A PR without `triaged` was not assessed, which is not the same as safe.
+#
+# Both layers only ever add labels, never remove them, so a risk/high stands
+# even if a later run's changed paths would not have matched on their own.
+#
+# Who reviews a PR is not decided here. That is GitHub's job, via
+# .github/CODEOWNERS and the PayRollup team's code review assignment.
+#
+# Ported from rsksmart/rootstack. The only differences are the branch filter
+# (rsk/** rather than main) and the sensitive-path list, which here means the
+# upstream files this fork patches rather than directories it owns.
+name: PR triager
+
+on:
+  pull_request:
+    branches: [rsk/**]
+    # ready_for_review matters because drafts are skipped below: a PR opened as
+    # a draft still needs labelling once it is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Least-privilege: manage PR labels, and bill inference to the org's Copilot
+# subscription through the built-in Actions token (no personal token needed).
+permissions:
+  contents: read
+  pull-requests: write
+  copilot-requests: write
+
+jobs:
+  triage:
+    # Drafts aren't up for review yet, so don't label them or spend a model call.
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    steps:
+      # Third-party actions pinned to an immutable commit SHA (supply-chain
+      # safety).
+      #
+      # Note that the path list is NOT read from the base branch: labeler fetches
+      # it with `repos.getContent({ ref: context.sha })`, and under
+      # `pull_request` that sha is the test-merge commit, so it is this PR's copy
+      # of .github/pr-triager.yml. A PR can therefore drop a sensitive glob in
+      # the same change that touches it and the floor will not fire. Moving to
+      # `pull_request_target` is what fixes this, since context.sha then points
+      # at the base branch; until then the floor is only as trustworthy as the
+      # human review that CODEOWNERS enforces.
+      - id: labeler
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          configuration-path: .github/rsk-pr-triager.yml
+          sync-labels: false
+
+      # `gh pr edit --add-label` does not create labels, it fails with "not
+      # found", so make sure both exist first. --force makes this idempotent.
+      # Without it the workflow silently depends on someone having created the
+      # labels by hand, which is a red first run in any other repo.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create risk/high --repo "$REPO" --color b60205 --description "Touches a sensitive area; review carefully" --force
+          gh label create triaged  --repo "$REPO" --color 0e8a16 --description "PR risk triage completed" --force
+
+      - id: floor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name' | grep -qx "risk/high"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "path floor already flagged this PR; skipping the model call"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only for the prompt file. Nothing below executes code from the PR.
+      # persist-credentials: false so the token is not left in .git/config on
+      # the runner (OSSF Scorecard flags the default), and sparse-checkout so we
+      # fetch the one directory we read instead of the whole repository.
+      - if: steps.floor.outputs.already == 'false'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/prompts
+
+      # provider: copilot spawns the `copilot` CLI as a subprocess, so it has to
+      # be installed on the runner first.
+      - if: steps.floor.outputs.already == 'false'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.18.0
+
+      - if: steps.floor.outputs.already == 'false'
+        run: npm install --global @github/copilot@1.0.76
+
+      - id: context
+        if: steps.floor.outputs.already == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          ctx="$RUNNER_TEMP/pr-context.txt"
+          raw="$RUNNER_TEMP/pr.diff"
+          gh pr diff "$PR" --repo "$REPO" > "$raw"
+          size=$(wc -c < "$raw")
+          {
+            echo "Title: $(gh pr view "$PR" --repo "$REPO" --json title -q .title)"
+            echo
+            echo "Changed files:"
+            gh pr view "$PR" --repo "$REPO" --json files -q '.files[] | "  \(.path) (+\(.additions)/-\(.deletions))"'
+            echo
+            # Only claim truncation when the diff really was truncated. The
+            # prompt tells the model to answer `high` whenever the diff looks
+            # truncated, so announcing it unconditionally biased every verdict.
+            if [ "$size" -gt 30000 ]; then
+              echo "Diff (truncated to the first 30000 of $size chars):"
+            else
+              echo "Diff:"
+            fi
+            head -c 30000 "$raw"
+          } > "$ctx"
+          echo "file=$ctx" >> "$GITHUB_OUTPUT"
+
+      # continue-on-error: a Copilot outage must not fail the PR check. It just
+      # means no verdict, and therefore no `triaged` label to say so.
+      - id: verdict
+        if: steps.floor.outputs.already == 'false'
+        continue-on-error: true
+        uses: actions/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222 # v3
+        with:
+          provider: copilot
+          # Empty on purpose: the action's own default is gpt-4.1, which this
+          # org's Copilot subscription does not offer, so the CLI exits 1. Empty
+          # means "let the CLI choose its default", which is a model the
+          # subscription is guaranteed to have.
+          model: ""
+          system-prompt-file: .github/prompts/rsk-pr-risk.md
+          prompt-file: ${{ steps.context.outputs.file }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ALREADY_HIGH: ${{ steps.floor.outputs.already }}
+          VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
+          VERDICT: ${{ steps.verdict.outputs.response }}
+        run: |
+          set -euo pipefail
+
+          if [ "$ALREADY_HIGH" = "true" ]; then
+            echo "risk/high already applied by the path floor"
+            gh pr edit "$PR" --repo "$REPO" --add-label "triaged"
+            exit 0
+          fi
+
+          if [ "$VERDICT_OUTCOME" != "success" ]; then
+            echo "::warning::the model step did not succeed; leaving the PR untriaged"
+            exit 0
+          fi
+
+          # Never use the model's text as a label name. Reduce it to one of two
+          # known words and let this script decide what to write; anything else
+          # is treated as the cautious answer rather than silently ignored.
+          verdict=$(printf '%s' "${VERDICT:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+          case "$verdict" in
+            high) ;;
+            low)  ;;
+            *)
+              echo "::warning::unexpected verdict '${VERDICT:-}', treating as high"
+              verdict=high
+              ;;
+          esac
+
+          echo "verdict: $verdict"
+          if [ "$verdict" = "high" ]; then
+            gh pr edit "$PR" --repo "$REPO" --add-label "risk/high"
+          fi
+          gh pr edit "$PR" --repo "$REPO" --add-label "triaged"

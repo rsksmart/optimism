@@ -1,0 +1,36 @@
+# Config for .github/workflows/rsk-pr-triager.yml. Changes in these paths are
+# always risk/high, no judgment involved. Everything else is left to that
+# workflow's `verdict` step, which asks Copilot to read the diff and escalates
+# to risk/high when the answer is `high`. Both only ever add the label.
+#
+# This is a fork, so "sensitive" cannot mean "directories we own". Per
+# AGENTS_rsk.md the RSK changes are inline IsRSKChain-gated patches inside
+# upstream files, so what matters is the upstream packages carrying those
+# patches. The Go list below is the same one .github/workflows/rsk-test.yml
+# already guards as RSK-divergent, so the two stay in step: if a package is
+# worth a scoped regression test, it is worth flagging on review.
+#
+# Ordinary CI plumbing is deliberately absent. A change to the PR-title check,
+# CodeQL or Scorecard is not flagged by path. .github/prompts/rsk-pr-risk.md
+# says the same, so both layers agree on what counts as risky.
+risk/high:
+  - changed-files:
+      - any-glob-to-any-file:
+          # Upstream packages the fork patches. Mirrors rsk-test.yml.
+          - "op-node/rollup/derive/**"
+          - "op-node/node/**"
+          - "op-service/sources/**"
+          - "op-service/txmgr/**"
+          - "op-deployer/pkg/deployer/broadcaster/**"
+          - "op-proposer/contracts/**"
+          # Divergent too, but excluded from rsk-test.yml because its tests need
+          # a Foundry runner. That makes it less covered by CI, not less risky.
+          - "op-deployer/pkg/deployer/forge/**"
+          # RSK-specific contracts: the splitter and the chain deploy script.
+          - "packages/contracts-rootstock/**"
+          # Release and publishing pipelines.
+          - ".github/workflows/rsk-release.yml"
+          - ".github/workflows/rsk-release-module.yml"
+          # The regression guard for everything above: weakening it hides the
+          # breakage the rest of this list exists to catch.
+          - ".github/workflows/rsk-test.yml"
