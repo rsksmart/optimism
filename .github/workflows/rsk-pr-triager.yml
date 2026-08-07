@@ -28,6 +28,13 @@ on:
     # a draft still needs labelling once it is marked ready.
     types: [opened, synchronize, reopened, ready_for_review]
 
+# One triage at a time per PR. Rapid pushes would otherwise overlap, and since
+# the run both clears `triaged` at the start and re-applies it at the end, an
+# older run finishing last could re-label a revision it never assessed.
+concurrency:
+  group: rsk-pr-triager-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 # Least-privilege: manage PR labels, and bill inference to the org's Copilot
 # subscription through the built-in Actions token (no personal token needed).
 permissions:
@@ -41,6 +48,27 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     steps:
+      # Bootstrap before anything can use the labels. This has to precede the
+      # labeler, not follow it: neither the labeler nor `gh pr edit --add-label`
+      # creates a missing label, so on a repo where they do not exist yet the
+      # first run would fail at whichever step reached one first. --force makes
+      # it idempotent. Neither label exists in this fork yet, so the first run
+      # here genuinely creates them rather than updating.
+      #
+      # `triaged` is also cleared here, because it means "this revision was
+      # assessed" and is re-applied at the end once a verdict exists. Left in
+      # place it would survive a later run that failed, showing a revision as
+      # assessed when it was not, which defeats the only purpose it has. It is
+      # the one label this workflow removes: risk/high is never removed.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh label create risk/high --repo "$REPO" --color b60205 --description "Touches a sensitive area; review carefully" --force
+          gh label create triaged  --repo "$REPO" --color 0e8a16 --description "This revision was risk-triaged" --force
+          gh pr edit "$PR" --repo "$REPO" --remove-label "triaged" || true
+
       # Third-party actions pinned to an immutable commit SHA (supply-chain
       # safety).
       #
@@ -57,17 +85,6 @@ jobs:
         with:
           configuration-path: .github/rsk-pr-triager.yml
           sync-labels: false
-
-      # `gh pr edit --add-label` does not create labels, it fails with "not
-      # found", so make sure both exist first. --force makes this idempotent.
-      # Without it the workflow silently depends on someone having created the
-      # labels by hand, which is a red first run in any other repo.
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          gh label create risk/high --repo "$REPO" --color b60205 --description "Touches a sensitive area; review carefully" --force
-          gh label create triaged  --repo "$REPO" --color 0e8a16 --description "PR risk triage completed" --force
 
       - id: floor
         env:
