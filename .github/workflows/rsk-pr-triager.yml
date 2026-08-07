@@ -1,6 +1,6 @@
 # PR triager. Labels a PR `risk/high` when it looks risky, in two layers:
 #
-#   1. actions/labeler flags the sensitive paths listed in .github/pr-triager.yml.
+#   1. actions/labeler flags the sensitive paths listed in .github/rsk-pr-triager.yml.
 #      Deterministic, and the list is versioned and reviewable.
 #   2. When that floor did not already flag it, Copilot reads the diff and gives
 #      a one-word verdict. Only the verdict comes from the model: this workflow
@@ -37,8 +37,15 @@ concurrency:
 
 # Least-privilege: manage PR labels, and bill inference to the org's Copilot
 # subscription through the built-in Actions token (no personal token needed).
+#
+# `issues: write` is for creating the repository labels, not for issues:
+# repository labels sit under the issues scope, and while updating an existing
+# one turns out to work with only pull-requests: write, creating a missing one
+# is the case the bootstrap step exists for and should not depend on that.
+# Neither label exists in this fork, so the first run here does create them.
 permissions:
   contents: read
+  issues: write
   pull-requests: write
   copilot-requests: write
 
@@ -75,7 +82,7 @@ jobs:
       # Note that the path list is NOT read from the base branch: labeler fetches
       # it with `repos.getContent({ ref: context.sha })`, and under
       # `pull_request` that sha is the test-merge commit, so it is this PR's copy
-      # of .github/pr-triager.yml. A PR can therefore drop a sensitive glob in
+      # of .github/rsk-pr-triager.yml. A PR can therefore drop a sensitive glob in
       # the same change that touches it and the floor will not fire. Moving to
       # `pull_request_target` is what fixes this, since context.sha then points
       # at the base branch; until then the floor is only as trustworthy as the
