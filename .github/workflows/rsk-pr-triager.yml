@@ -19,7 +19,7 @@
 # Ported from rsksmart/rootstack. The only differences are the branch filter
 # (rsk/** rather than main) and the sensitive-path list, which here means the
 # upstream files this fork patches rather than directories it owns.
-name: PR triager
+name: rsk-pr-triager
 
 on:
   pull_request:
