@@ -105,9 +105,27 @@ jobs:
         working-directory: packages/contracts-rootstock
         run: forge test -vv
 
-      # Run from the repo root: single Go module, explicit package path.
-      # The Foundry install above put forge 1.2.3 on PATH, which is what
-      # forge.PathBinary() resolves and what StandardBin.Ensure() compares
-      # against StandardVersion ("v1.2.3") before falling back to a download.
-      - name: Test op-deployer forge package
-        run: go test -timeout 20m ./op-deployer/pkg/deployer/forge/...
+      # This existing upstream test downloads six public Foundry release
+      # archives. Retry only that live-network boundary; do not mask failures in
+      # the package's deterministic tests by rerunning the whole suite.
+      - name: Test live Foundry release downloads
+        run: |
+          for attempt in 1 2 3; do
+            if go test -count=1 -timeout 2m -run '^TestStandardBinary_ForgeBins$' ./op-deployer/pkg/deployer/forge/...; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::live Foundry download test failed after 3 attempts"
+              exit 1
+            fi
+            delay=$((attempt * 5))
+            echo "::warning::live Foundry download test failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
+
+      # Run from the repo root: single Go module, explicit package path. The
+      # live-network test ran above; every deterministic test runs exactly once.
+      # Foundry 1.2.3 is on PATH, which is what forge.PathBinary() resolves and
+      # what StandardBin.Ensure() compares against StandardVersion ("v1.2.3").
+      - name: Test remaining op-deployer forge package
+        run: go test -timeout 20m -skip '^TestStandardBinary_ForgeBins$' ./op-deployer/pkg/deployer/forge/...
