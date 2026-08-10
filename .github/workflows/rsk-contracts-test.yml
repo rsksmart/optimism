@@ -41,8 +41,9 @@ jobs:
     # submodules, compiles the transitive contracts-bedrock tree with
     # optimizer_runs = 5000, and the Go tests download six Foundry release
     # tarballs (TestStandardBinary_ForgeBins). Expected wall time is ~8-15 min;
-    # 30 is a ceiling, not a target.
-    timeout-minutes: 30
+    # 45 leaves enough room for the Go test timeout to fire first and emit its
+    # goroutine dump after the preceding checkout and Solidity work complete.
+    timeout-minutes: 45
     steps:
       # SHA-pinned for supply-chain safety (same pin as rsk-test.yml).
       #
