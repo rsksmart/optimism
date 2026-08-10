@@ -34,9 +34,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   contracts-rootstock:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Higher than rsk-test.yml's 20: a cold run clones ~60 MB of Solidity
     # submodules, compiles the transitive contracts-bedrock tree with
     # optimizer_runs = 5000, and the Go tests download six Foundry release
@@ -88,7 +92,7 @@ jobs:
       - name: Show forge version
         run: |
           forge --version
-          forge --version | grep -Eq '(^|[^0-9])1\.2\.3([^0-9]|$)' || {
+          forge --version | sed -n '1p' | grep -Eq '(^|[^0-9])1\.2\.3([^0-9]|$)' || {
             echo "::error::expected Foundry 1.2.3 (see mise.toml and op-deployer/pkg/deployer/forge/version.json)"
             exit 1
           }
