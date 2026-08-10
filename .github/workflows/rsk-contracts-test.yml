@@ -20,28 +20,16 @@
 # exercise (PATH binary vs. download), and would also change contracts-rootstock
 # artifacts.
 #
-# The path filters intentionally include this workflow file itself: without it a
-# PR that only adds/edits this workflow triggers nothing, and CI greenness for
-# such a PR is unprovable. They also include op-deployer/pkg/deployer/forge/**,
-# because this job is the only CI that runs that Go package's tests (rsk-test.yml
-# excludes it), so changes to the package itself must trigger it.
+# This workflow runs on every RSK PR so its job can safely be configured as a
+# required check. A required workflow skipped by path filters would otherwise
+# remain pending and block unrelated PRs from merging.
 name: rsk-contracts-test
 
 on:
   pull_request:
     branches: [rsk/**]
-    paths:
-      - 'packages/contracts-rootstock/**'
-      - 'packages/contracts-bedrock/**'
-      - 'op-deployer/pkg/deployer/forge/**'
-      - '.github/workflows/rsk-contracts-test.yml'
   push:
     branches: [rsk/develop]
-    paths:
-      - 'packages/contracts-rootstock/**'
-      - 'packages/contracts-bedrock/**'
-      - 'op-deployer/pkg/deployer/forge/**'
-      - '.github/workflows/rsk-contracts-test.yml'
 
 permissions:
   contents: read
