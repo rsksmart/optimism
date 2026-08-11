@@ -1,0 +1,32 @@
+# Paths that are always risk/high, no judgment involved. Everything else is left
+# to the verdict step in .github/workflows/rsk-pr-triager.yml. Ordinary CI
+# plumbing is deliberately absent, and .github/prompts/rsk-pr-risk.md says the
+# same so both layers agree on what counts as risky.
+#
+# This is a fork, so "sensitive" cannot mean "directories we own": per
+# AGENTS_rsk.md the RSK changes are inline IsRSKChain-gated patches inside
+# upstream files. The Go list is the one rsk-test.yml already guards as
+# RSK-divergent, so the two stay in step.
+risk/high:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "op-node/rollup/derive/**"
+          - "op-node/node/**"
+          - "op-service/sources/**"
+          - "op-service/txmgr/**"
+          - "op-deployer/pkg/deployer/broadcaster/**"
+          - "op-proposer/contracts/**"
+          # Divergent too, but excluded from rsk-test.yml because its tests need
+          # Foundry. Less covered by CI, not less risky.
+          - "op-deployer/pkg/deployer/forge/**"
+          - "packages/contracts-rootstock/**"
+          - ".github/workflows/rsk-release.yml"
+          - ".github/workflows/rsk-release-module.yml"
+          # The regression guard for everything above: weakening it hides the
+          # breakage the rest of this list exists to catch.
+          - ".github/workflows/rsk-test.yml"
+          # The triager itself: a change to what counts as risky is the control,
+          # not plumbing.
+          - ".github/workflows/rsk-pr-triager.yml"
+          - ".github/rsk-pr-triager.yml"
+          - ".github/prompts/rsk-pr-risk.md"
