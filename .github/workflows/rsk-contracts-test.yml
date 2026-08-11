@@ -1,0 +1,136 @@
+# Foundry-enabled CI for the RSK Solidity carry-on.
+#
+# Two workloads need a real `forge` on PATH, so they share one runner:
+#
+#   1. packages/contracts-rootstock — a standalone forge package (src =
+#      'contracts', out = 'forge-artifacts') whose remappings all resolve into
+#      ../contracts-bedrock and its lib/* submodules, so the build needs those
+#      submodules checked out (see the scoped submodule step below).
+#
+#   2. ./op-deployer/pkg/deployer/forge/... — the Go tests that rsk-test.yml
+#      deliberately excludes: "its tests invoke the `forge` binary (Foundry)
+#      and compile Solidity, so they need a Foundry-enabled runner. Add that as
+#      a separate job once this hermetic core is green." This is that job.
+#
+# Foundry is pinned to 1.2.3, the version the repo already pins in two places:
+# mise.toml (forge/cast/anvil = "1.2.3", lines 49-51) and
+# op-deployer/pkg/deployer/forge/version.json ("forge": "v1.2.3" + per-platform
+# release checksums). The Go tests compare `forge --version` against that
+# constant, so a different Foundry here silently changes which code path they
+# exercise (PATH binary vs. download), and would also change contracts-rootstock
+# artifacts.
+#
+# This workflow runs on every RSK PR so its job can safely be configured as a
+# required check. A required workflow skipped by path filters would otherwise
+# remain pending and block unrelated PRs from merging.
+name: rsk-contracts-test
+
+on:
+  pull_request:
+    branches: [rsk/**]
+  push:
+    branches: [rsk/develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts-rootstock:
+    runs-on: ubuntu-24.04
+    # Higher than rsk-test.yml's 20: a cold run clones ~60 MB of Solidity
+    # submodules, compiles the transitive contracts-bedrock tree with
+    # optimizer_runs = 5000, and the Go tests download six Foundry release
+    # tarballs (TestStandardBinary_ForgeBins). Expected wall time is ~8-15 min;
+    # 45 leaves enough room for the Go test timeout to fire first and emit its
+    # goroutine dump after the preceding checkout and Solidity work complete.
+    timeout-minutes: 45
+    steps:
+      # SHA-pinned for supply-chain safety (same pin as rsk-test.yml).
+      #
+      # Submodules are NOT fetched by checkout: `submodules: recursive` here
+      # would also clone the two repo-root submodules (op-rbuilder,
+      # rollup-boost — unrelated Rust builders) that nothing in this job needs.
+      # The scoped init below fetches exactly the Solidity libs.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # 11 submodules live under packages/contracts-bedrock/lib
+      # (`git submodule status packages/contracts-bedrock | wc -l` => 11); the
+      # foundry.toml remappings point into 10 of them. --recursive additionally
+      # initialises the nested ones (solady + solmate -> ds-test, lib-keccak ->
+      # forge-std/solady, openzeppelin-contracts-v5 -> forge-std/erc4626-tests);
+      # those are not referenced by our remappings, but recursion is cheap
+      # insurance against a transitive import and matches how the release
+      # workflows check this repo out.
+      #
+      # Every URL in .gitmodules is a public https://github.com/... URL, so no
+      # credentials are needed (checkout ran with persist-credentials: false).
+      # No --depth: the pinned commits are not all branch tips, and a shallow
+      # submodule fetch can fail to reach them.
+      - name: Check out contracts-bedrock submodules
+        run: git submodule update --init --recursive --jobs 4 packages/contracts-bedrock
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          # Passed verbatim to `foundryup --install <version>`. The action's docs
+          # accept a SemVer with or without the `v` prefix; we use the exact
+          # string from op-deployer/pkg/deployer/forge/version.json so the pin is
+          # greppable across the repo.
+          version: v1.2.3
+          # This action's cache only holds Foundry's RPC/Etherscan responses
+          # (~/.foundry/cache). Nothing here forks a live network, so caching
+          # would write a new cache entry every run for no benefit.
+          cache: false
+
+      # Fail loudly if the pin did not take: everything below assumes 1.2.3.
+      - name: Show forge version
+        run: |
+          forge --version
+          forge --version | sed -n '1p' | grep -Eq '(^|[^0-9])1\.2\.3([^0-9]|$)' || {
+            echo "::error::expected Foundry 1.2.3 (see mise.toml and op-deployer/pkg/deployer/forge/version.json)"
+            exit 1
+          }
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build contracts-rootstock
+        working-directory: packages/contracts-rootstock
+        run: forge build
+
+      - name: Test contracts-rootstock
+        working-directory: packages/contracts-rootstock
+        run: forge test -vv
+
+      # This existing upstream test downloads six public Foundry release
+      # archives. Retry only that live-network boundary; do not mask failures in
+      # the package's deterministic tests by rerunning the whole suite.
+      - name: Test live Foundry release downloads
+        run: |
+          for attempt in 1 2 3; do
+            if go test -count=1 -timeout 2m -run '^TestStandardBinary_ForgeBins$' ./op-deployer/pkg/deployer/forge/...; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::live Foundry download test failed after 3 attempts"
+              exit 1
+            fi
+            delay=$((attempt * 5))
+            echo "::warning::live Foundry download test failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
+
+      # Run from the repo root: single Go module, explicit package path. The
+      # live-network test ran above; every deterministic test runs exactly once.
+      # Foundry 1.2.3 is on PATH, which is what forge.PathBinary() resolves and
+      # what StandardBin.Ensure() compares against StandardVersion ("v1.2.3").
+      - name: Test remaining op-deployer forge package
+        run: go test -timeout 20m -skip '^TestStandardBinary_ForgeBins$' ./op-deployer/pkg/deployer/forge/...
