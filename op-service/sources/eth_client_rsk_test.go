@@ -17,6 +17,7 @@ package sources
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -69,7 +71,7 @@ func TestRSK_EthClient_HeaderVerifierHook(t *testing.T) {
 		err := s.runHeaderVerify(ctx, good)
 		require.ErrorIs(t, err, wantErr)
 		require.NotNil(t, gotHeader)
-		require.Equal(t, uint64(good.Number), gotHeader.Number.Uint64())
+		require.Equal(t, uint64(good.Number), bigs.Uint64Strict(gotHeader.Number))
 	})
 
 	t.Run("non-nil hook overrides the default (accepts a tampered header)", func(t *testing.T) {
@@ -263,4 +265,206 @@ func TestRSK_RPCReceiptsFetcher_ReceiptsValidatorHook(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 		require.NotContains(t, err.Error(), "unexpected nil block number")
 	})
+}
+
+// rskEthClientConfig returns a copy of testEthClientConfig with the given
+// TrustRPC value and BlockVerifier hook.
+func rskEthClientConfig(trustRPC bool, hook BlockVerifierFn) *EthClientConfig {
+	cfg := *testEthClientConfig
+	cfg.TrustRPC = trustRPC
+	cfg.BlockVerifier = hook
+	return &cfg
+}
+
+// rskMockBlockRPC returns a mockRPC serving the given block for the fullTx
+// eth_getBlockByHash / eth_getBlockByNumber calls, counting every hit so
+// tests can assert whether a result was served from cache or re-fetched.
+func rskMockBlockRPC(ctx context.Context, block *RPCBlock, rpcCalls *int) *mockRPC {
+	m := new(mockRPC)
+	serve := func(args mock.Arguments) {
+		*rpcCalls++
+		*(args[1].(**RPCBlock)) = block
+	}
+	m.On("CallContext", ctx, new(*RPCBlock),
+		"eth_getBlockByHash", []any{block.Hash, true}).Run(serve).Return([]error{nil})
+	m.On("CallContext", ctx, new(*RPCBlock),
+		"eth_getBlockByNumber", []any{block.Number.String(), true}).Run(serve).Return([]error{nil})
+	return m
+}
+
+// TestRSK_BlockVerifierRunsWithTrustRPC (PAYROLLUP-117 T1) pins the hybrid
+// validation policy: an installed BlockVerifier hook must run on the blockCall
+// and payloadCall paths even with TrustRPC=true. TrustRPC only disables the
+// default Ethereum verification, never a non-Ethereum hook installed
+// explicitly to replace it.
+func TestRSK_BlockVerifierRunsWithTrustRPC(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("blockCall by hash", func(t *testing.T) {
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(1)), 2)
+		hookCalls := 0
+		var gotTxs types.Transactions
+		hook := func(_ context.Context, _ *types.Header, txs types.Transactions) error {
+			hookCalls++
+			gotTxs = txs
+			return nil
+		}
+		s, err := NewEthClient(rskMockBlockRPC(ctx, block, new(int)), nil, nil, rskEthClientConfig(true, hook))
+		require.NoError(t, err)
+
+		_, txs, err := s.InfoAndTxsByHash(ctx, block.Hash)
+		require.NoError(t, err)
+		require.Len(t, txs, len(block.Transactions))
+		require.Equal(t, 1, hookCalls, "BlockVerifier must run on blockCall despite TrustRPC=true")
+		require.Len(t, gotTxs, len(block.Transactions), "hook must receive the block transactions")
+	})
+
+	t.Run("blockCall by number", func(t *testing.T) {
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(2)), 2)
+		hookCalls := 0
+		hook := func(_ context.Context, _ *types.Header, _ types.Transactions) error {
+			hookCalls++
+			return nil
+		}
+		s, err := NewEthClient(rskMockBlockRPC(ctx, block, new(int)), nil, nil, rskEthClientConfig(true, hook))
+		require.NoError(t, err)
+
+		_, _, err = s.InfoAndTxsByNumber(ctx, uint64(block.Number))
+		require.NoError(t, err)
+		require.Equal(t, 1, hookCalls, "BlockVerifier must run on blockCall despite TrustRPC=true")
+	})
+
+	t.Run("payloadCall", func(t *testing.T) {
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(3)), 2)
+		hookCalls := 0
+		hook := func(_ context.Context, _ *types.Header, _ types.Transactions) error {
+			hookCalls++
+			return nil
+		}
+		s, err := NewEthClient(rskMockBlockRPC(ctx, block, new(int)), nil, nil, rskEthClientConfig(true, hook))
+		require.NoError(t, err)
+
+		envelope, err := s.PayloadByHash(ctx, block.Hash)
+		require.NoError(t, err)
+		require.Equal(t, block.Hash, envelope.ExecutionPayload.BlockHash)
+		require.Equal(t, 1, hookCalls, "BlockVerifier must run on payloadCall despite TrustRPC=true")
+	})
+}
+
+// TestRSK_BlockVerifierMismatchHaltsWithTrustRPC (PAYROLLUP-117 T2) pins the
+// mismatch behavior with TrustRPC=true: the hook's error (carrying both the
+// header root and the computed root, as rsk/l1source VerifyRSKBlock produces)
+// halts the call, keeps both roots in the message, and the failed result is
+// never cached — a later call re-queries the RPC.
+func TestRSK_BlockVerifierMismatchHaltsWithTrustRPC(t *testing.T) {
+	ctx := context.Background()
+	headerRoot := randHash()
+	computedRoot := randHash()
+	wantErr := fmt.Errorf("tx root mismatch: header %s, computed %s", headerRoot, computedRoot)
+
+	t.Run("blockCall", func(t *testing.T) {
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(4)), 2)
+		hookCalls := 0
+		hook := func(_ context.Context, _ *types.Header, _ types.Transactions) error {
+			hookCalls++
+			return wantErr
+		}
+		rpcCalls := 0
+		s, err := NewEthClient(rskMockBlockRPC(ctx, block, &rpcCalls), nil, nil, rskEthClientConfig(true, hook))
+		require.NoError(t, err)
+
+		_, _, err = s.InfoAndTxsByHash(ctx, block.Hash)
+		require.ErrorIs(t, err, wantErr, "mismatch must halt blockCall despite TrustRPC=true")
+		require.ErrorContains(t, err, headerRoot.String(), "error must keep the header root")
+		require.ErrorContains(t, err, computedRoot.String(), "error must keep the computed root")
+
+		_, _, err = s.InfoAndTxsByHash(ctx, block.Hash)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, 2, rpcCalls, "failed result must not be cached: second call re-queries the RPC")
+		require.Equal(t, 2, hookCalls)
+	})
+
+	t.Run("payloadCall", func(t *testing.T) {
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(5)), 2)
+		hookCalls := 0
+		hook := func(_ context.Context, _ *types.Header, _ types.Transactions) error {
+			hookCalls++
+			return wantErr
+		}
+		rpcCalls := 0
+		s, err := NewEthClient(rskMockBlockRPC(ctx, block, &rpcCalls), nil, nil, rskEthClientConfig(true, hook))
+		require.NoError(t, err)
+
+		_, err = s.PayloadByHash(ctx, block.Hash)
+		require.ErrorIs(t, err, wantErr, "mismatch must halt payloadCall despite TrustRPC=true")
+		require.ErrorContains(t, err, headerRoot.String(), "error must keep the header root")
+		require.ErrorContains(t, err, computedRoot.String(), "error must keep the computed root")
+
+		_, err = s.PayloadByHash(ctx, block.Hash)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, 2, rpcCalls, "failed result must not be cached: second call re-queries the RPC")
+		require.Equal(t, 2, hookCalls)
+	})
+}
+
+// TestRSK_NilBlockVerifierKeepsUpstreamSemantics (PAYROLLUP-117 T3,
+// characterization) protects the upstream semantics the hybrid policy must
+// not change: with TrustRPC=true and no hook installed, no verification runs
+// at all — a block whose hash would fail the default Verify is accepted.
+func TestRSK_NilBlockVerifierKeepsUpstreamSemantics(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("blockCall", func(t *testing.T) {
+		good, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(6)), 2)
+		bad := *good
+		bad.Hash = rskTamperHash(bad.Hash) // default Verify would reject this block
+
+		s, err := NewEthClient(rskMockBlockRPC(ctx, &bad, new(int)), nil, nil, rskEthClientConfig(true, nil))
+		require.NoError(t, err)
+
+		_, txs, err := s.InfoAndTxsByHash(ctx, bad.Hash)
+		require.NoError(t, err, "TrustRPC=true with nil hook must skip all verification (upstream semantics)")
+		require.Len(t, txs, len(bad.Transactions))
+	})
+
+	t.Run("payloadCall", func(t *testing.T) {
+		good, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(7)), 2)
+		bad := *good
+		bad.Hash = rskTamperHash(bad.Hash)
+
+		s, err := NewEthClient(rskMockBlockRPC(ctx, &bad, new(int)), nil, nil, rskEthClientConfig(true, nil))
+		require.NoError(t, err)
+
+		envelope, err := s.PayloadByHash(ctx, bad.Hash)
+		require.NoError(t, err, "TrustRPC=true with nil hook must skip all verification (upstream semantics)")
+		require.Equal(t, bad.Hash, envelope.ExecutionPayload.BlockHash)
+	})
+}
+
+// TestRSK_HeaderVerifyEthereumFallbackRejectsRSKIP92Hash (PAYROLLUP-117 T6,
+// characterization) pins the known limit of the hybrid policy: with
+// TrustRPC=false and no HeaderVerifier installed, headerCall falls back to the
+// default Ethereum hash recomputation (hdr.VerifyHash), which cannot match an
+// RSKIP-92-style header hash. Running against RSK therefore requires
+// TrustRPC=true; this test documents the boundary, it is not a bug to fix.
+func TestRSK_HeaderVerifyEthereumFallbackRejectsRSKIP92Hash(t *testing.T) {
+	ctx := context.Background()
+	_, rhdr := randHeader()
+	rskip92 := *rhdr
+	// An RSKIP-92 hash is not the keccak of the geth-style header; a tampered
+	// hash stands in for it.
+	rskip92.Hash = rskTamperHash(rhdr.Hash)
+
+	m := new(mockRPC)
+	m.On("CallContext", ctx, new(*RPCHeader),
+		"eth_getBlockByHash", []any{rskip92.Hash, false}).Run(func(args mock.Arguments) {
+		*args[1].(**RPCHeader) = &rskip92
+	}).Return([]error{nil})
+
+	s, err := NewEthClient(m, nil, nil, rskEthClientConfig(false, nil))
+	require.NoError(t, err)
+
+	_, err = s.InfoByHash(ctx, rskip92.Hash)
+	require.ErrorContains(t, err, "failed to verify block hash",
+		"Ethereum VerifyHash fallback must reject an RSKIP-92-style header hash")
 }

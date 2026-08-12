@@ -243,6 +243,10 @@ func (s *EthClient) runHeaderVerify(ctx context.Context, hdr *RPCHeader) error {
 // runBlockVerify runs the configured BlockVerifier hook if non-nil,
 // otherwise falls back to the default RPCBlock.Verify() (block hash +
 // DeriveSha tx-trie root + L1/L2 withdrawals).
+//
+// Callers gate the default path on !trustRPC, but an installed hook runs
+// regardless of trustRPC: trusting the RPC only waives the default Ethereum
+// checks, not a verifier installed explicitly to replace them (PAYROLLUP-117).
 func (s *EthClient) runBlockVerify(ctx context.Context, b *RPCBlock) error {
 	if s.blockVerifier != nil {
 		return s.blockVerifier(ctx, b.CreateGethHeader(), types.Transactions(b.Transactions))
@@ -255,6 +259,10 @@ func (s *EthClient) runBlockVerify(ctx context.Context, b *RPCBlock) error {
 // hash recomputation), caches it, and returns it together with the trusted
 // hash reported by the RPC. It is the single source of truth for both
 // HeaderBy* and InfoBy*.
+//
+// Unlike blockCall/payloadCall, header verification stays gated on !trustRPC
+// even when a HeaderVerifier hook is set: with trustRPC=true no header
+// verification runs at all (hybrid policy, PAYROLLUP-117).
 //
 // The trusted hash matters on non-Ethereum L1s (RSK / RSKIP-92) where
 // go-ethereum's header.Hash() recomputation does not match the canonical
@@ -301,7 +309,9 @@ func (s *EthClient) blockCall(ctx context.Context, method string, id rpcBlockID)
 	if block == nil {
 		return nil, nil, common.Hash{}, ethereum.NotFound
 	}
-	if !s.trustRPC {
+	// Hybrid policy (PAYROLLUP-117): trustRPC only skips the default Ethereum
+	// verification; an explicitly installed BlockVerifier hook always runs.
+	if !s.trustRPC || s.blockVerifier != nil {
 		if err := s.runBlockVerify(ctx, block); err != nil {
 			return nil, nil, common.Hash{}, err
 		}
@@ -329,7 +339,9 @@ func (s *EthClient) payloadCall(ctx context.Context, method string, id rpcBlockI
 	if block == nil {
 		return nil, ethereum.NotFound
 	}
-	if !s.trustRPC {
+	// Hybrid policy (PAYROLLUP-117): trustRPC only skips the default Ethereum
+	// verification; an explicitly installed BlockVerifier hook always runs.
+	if !s.trustRPC || s.blockVerifier != nil {
 		if err := s.runBlockVerify(ctx, block); err != nil {
 			return nil, err
 		}
