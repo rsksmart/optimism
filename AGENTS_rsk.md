@@ -76,6 +76,36 @@ wherever they conflict.** Read this before acting on anything in those files.
   RSK-only backoff to a tiny adapter, a ~3-line diff from upstream instead of a
   full rewrite (PAYROLLUP-87).
 
+### Recorded divergence: `op-service/sources` block gates (PAYROLLUP-117)
+
+`op-service/sources/eth_client.go` intentionally differs from upstream at
+exactly two verification gates:
+
+- `blockCall`: upstream `if !s.trustRPC` is
+  `if !s.trustRPC || s.blockVerifier != nil` in this fork.
+- `payloadCall`: the same upstream gate has the same fork change.
+
+The purpose is narrow: an explicitly installed `BlockVerifier` must validate
+the transaction root before a full block or execution payload can be cached or
+returned when RSK runs with `TrustRPC=true`. A nil hook preserves upstream
+behavior exactly: trusted-RPC calls skip block verification. The patch does not
+change `headerCall`, `GetProof`, receipts, RPC decoding, cache placement, or the
+default verification path used with `TrustRPC=false`.
+
+Do not simplify either gate back to `if !s.trustRPC`: that silently disables
+RSK transaction-root validation. Conversely, do not broaden this exception to
+`HeaderVerifier`. Rootstack deliberately leaves that hook nil because the
+decoded `RPCHeader` has already discarded the RSK-specific fields needed to
+recompute an RSKIP-92 block hash.
+
+The hermetic regression contract is in `eth_client_rsk_test.go`:
+`TestRSK_BlockVerifierRunsWithTrustRPC` covers block and payload execution,
+`TestRSK_BlockVerifierMismatchHaltsWithTrustRPC` covers error propagation and
+no-cache/re-fetch behavior, `TestRSK_NilBlockVerifierKeepsUpstreamSemantics`
+pins the nil-hook default, and
+`TestRSK_HeaderVerifyEthereumFallbackRejectsRSKIP92Hash` records why RSK cannot
+use the `TrustRPC=false` Ethereum header fallback.
+
 ## Testing RSK changes
 
 Upstream tests only guard untouched behavior; some RSK branches even make an
@@ -115,7 +145,7 @@ Run a package's RSK tests with, e.g.:
 | `op-service/txmgr/metrics/tx_metrics.go` | nil-guarded fee gauges (nil base/blob fee) | `tx_metrics_rsk_test.go` |
 | `op-node/rollup/derive/l1_traversal{,_managed}.go` | reorg-aware receipt-fetch `NotFound` handling | `l1_traversal_rsk_test.go` |
 | `op-node/rollup/derive/l1_block_info.go` | nil L1 `BaseFee` ⇒ 0 (no panic) | `l1_block_info_rsk_test.go` |
-| `op-service/sources/{eth_client,receipts_rpc,types}.go` | pluggable block / header / receipts / tx-hash hooks | `eth_client_rsk_test.go` |
+| `op-service/sources/{eth_client,receipts_rpc,types}.go` | pluggable block / header / receipts / tx-hash hooks; `blockCall` and `payloadCall` run an installed `BlockVerifier` with `TrustRPC=true` | `eth_client_rsk_test.go` (`TestRSK_BlockVerifierRunsWithTrustRPC`, `TestRSK_BlockVerifierMismatchHaltsWithTrustRPC`, `TestRSK_NilBlockVerifierKeepsUpstreamSemantics`, `TestRSK_HeaderVerifyEthereumFallbackRejectsRSKIP92Hash`) |
 | `op-deployer/pkg/deployer/broadcaster` | `TxMgrConfigHook` on `KeyedBroadcasterOpts` | `keyed_rsk_test.go` |
 | `op-deployer/pkg/deployer/forge` | `ExtraScriptOpts` on `Client` | `client_rsk_test.go` |
 | `op-proposer/contracts/disputegamefactory.go` | skip un-loadable games; surface ctx errors | `disputegamefactory_rsk_test.go` |
