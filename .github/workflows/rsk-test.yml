@@ -1,18 +1,12 @@
-# Scoped Go tests for the packages the RSK fork diverges from upstream in.
+# Go CI for the RSK fork: whole-module static checks, plus a scoped test suite
+# for the packages the fork diverges from upstream in.
 #
-# Runs on every PR to rsk/** (and on push to rsk/develop). A single `go test` over
-# the package paths below covers two things at once: upstream's existing tests, as
-# a regression guard that the fork's changes don't break them, and the fork's own
-# `_rsk_test.go` files, which sit in those same packages and so are picked up by
-# the same invocation. That RSK-specific coverage landed in PAYROLLUP-79; see
-# AGENTS_rsk.md for the `_rsk_test.go` / `TestRSK_` convention.
+# Both jobs run on every PR to rsk/** (and on push to rsk/develop). They are
+# separate jobs so they run in parallel and neither hides the other's result;
+# the cost is a second checkout and compile on its own runner.
 #
-# The repo is a single Go module at the root, so one `go test` with explicit
-# package paths is enough.
-#
-# op-deployer/pkg/deployer/forge is EXCLUDED here: its tests invoke the `forge`
-# binary (Foundry) and compile Solidity, so they need a Foundry-enabled runner.
-# That job exists separately, in rsk-contracts-test.yml.
+# The repo is a single Go module at the root, so every command below is one
+# invocation from the repo root.
 name: rsk-test
 
 on:
@@ -25,6 +19,108 @@ permissions:
   contents: read
 
 jobs:
+  # Build, vet, format-check and lint EVERY package. `go test` only compiles
+  # the packages it runs, so until this job existed a compile error anywhere
+  # outside the six trees in go-tests passed CI unnoticed (PAYROLLUP-137).
+  # rootstack, which consumes this fork, already ran build and vet before its
+  # own tests; this closes the gap on our side. Locally the same checks are
+  # `go build ./...`, `go vet ./...` and `just lint-go`.
+  go-checks:
+    runs-on: ubuntu-latest
+    # Higher than go-tests' 20: `golangci-lint run ./...` over the whole module
+    # is the long pole (~5 min on a 10-core dev box; this runner has 4), on top
+    # of a cold compile of every package and the one-off custom-linter build.
+    timeout-minutes: 45
+    steps:
+      # SHA-pinned for supply-chain safety (same pins as go-tests below).
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # op-core/superchain/chain.go carries `//go:embed superchain-configs.zip`,
+      # and that zip is gitignored — it is rebuilt from the superchain-registry
+      # commit pinned in superchain-registry-commit.txt. Without it a fresh
+      # checkout cannot compile the package at all ("pattern
+      # superchain-configs.zip: no matching files found"), so every command
+      # below needs this step first. go-tests does not: none of its six trees
+      # import op-core/superchain.
+      #
+      # Same command as `just sync-superchain`. Needs git, yq, jq and zip, all
+      # preinstalled on the runner image; ~6 s (a shallow clone of the registry).
+      - name: Sync superchain configs
+        run: bash op-core/superchain/sync-superchain.sh
+
+      # The script rewrites the tracked .sha256 from the zip it just built, so a
+      # diff here means the bundle this run produced is not the one that was
+      # reviewed: either the committed hash is stale, or generation was partial
+      # (a failed registry clone, or one of the tools above missing mid-pipeline,
+      # would otherwise leave a silently truncated zip that still compiles). The
+      # zip is byte-deterministic — normalized mtimes and permissions, `zip -oX`
+      # — so an honest run reproduces the committed hash exactly.
+      - name: Verify the superchain bundle is the reviewed one
+        run: git diff --exit-code -- op-core/superchain/superchain-configs.zip.sha256
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # .golangci.yaml enables `bigint`, a plugin-module linter whose source
+      # lives in linter/analyzers, so a stock binary refuses the config outright
+      # with `plugin(bigint): plugin "bigint" not found`. golangci-lint is
+      # therefore only the *builder* here: `golangci-lint custom` reads
+      # linter/.custom-gcl.yml and emits linter/bin/op-golangci-lint, the same
+      # binary `just build-customlint` produces for local runs.
+      #
+      # The version is read from .custom-gcl.yml (`version: v2.8.0`) instead of
+      # repeated as a literal, because that field is what decides which
+      # golangci-lint actually gets compiled — reading it keeps the builder and
+      # the built binary from drifting apart. mise.toml pins the same 2.8.0 for
+      # local dev; the two must move together.
+      - name: Build the custom golangci-lint
+        run: |
+          version="$(yq -r '.version' linter/.custom-gcl.yml)"
+          echo "building golangci-lint ${version} with the bigint plugin"
+          go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${version}"
+          mkdir -p linter/bin
+          (cd linter && "$(go env GOPATH)/bin/golangci-lint" custom)
+          ./linter/bin/op-golangci-lint --version
+
+      # The Lint step below does detect unformatted files too — at 2.8.0 `run`
+      # reports the `formatters:` block as "File is not properly formatted
+      # (goimports)" — but it points at a single line and never shows the
+      # rewrite. `fmt --diff` prints the exact diff, exits non-zero, and touches
+      # nothing; it also runs no linters and type-checks nothing, so it lands in
+      # well under half the time and names formatting as the reason the job went
+      # red. Locally, `./linter/bin/op-golangci-lint fmt` (no --diff) applies it.
+      # Same binary and config as Lint, so there is no separate gofmt/goimports
+      # pin to keep in sync.
+      - name: Check formatting
+        run: ./linter/bin/op-golangci-lint fmt --diff
+
+      # Mirrors `just lint-go`, minus its `go mod tidy -diff` (out of scope for
+      # PAYROLLUP-137).
+      - name: Lint
+        run: ./linter/bin/op-golangci-lint run ./...
+
+  # Scoped Go tests for the packages the RSK fork diverges from upstream in.
+  #
+  # A single `go test` over the package paths below covers two things at once:
+  # upstream's existing tests, as a regression guard that the fork's changes
+  # don't break them, and the fork's own `_rsk_test.go` files, which sit in those
+  # same packages and so are picked up by the same invocation. That RSK-specific
+  # coverage landed in PAYROLLUP-79; see AGENTS_rsk.md for the `_rsk_test.go` /
+  # `TestRSK_` convention.
+  #
+  # op-deployer/pkg/deployer/forge is EXCLUDED here: its tests invoke the `forge`
+  # binary (Foundry) and compile Solidity, so they need a Foundry-enabled runner.
+  # That job exists separately, in rsk-contracts-test.yml.
   go-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
