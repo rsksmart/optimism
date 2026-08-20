@@ -19,17 +19,20 @@ permissions:
   contents: read
 
 jobs:
-  # Build, vet, format-check and lint EVERY package. `go test` only compiles
-  # the packages it runs, so until this job existed a compile error anywhere
-  # outside the six trees in go-tests passed CI unnoticed (PAYROLLUP-137).
-  # rootstack, which consumes this fork, already ran build and vet before its
-  # own tests; this closes the gap on our side. Locally the same checks are
-  # `go build ./...`, `go vet ./...` and `just lint-go`.
+  # Build, vet and lint EVERY package. `go test` only compiles the packages it
+  # runs, so until this job existed a compile error anywhere outside the six
+  # trees in go-tests passed CI unnoticed (PAYROLLUP-137). rootstack, which
+  # consumes this fork, already ran build and vet before its own tests; this
+  # closes the gap on our side. Locally the same checks are `go build ./...`,
+  # `go vet ./...` and `just lint-go`.
+  #
+  # Steps run build, then vet, then lint — the natural order in which a change
+  # stops compiling, then stops type-checking, then stops satisfying style.
   go-checks:
     runs-on: ubuntu-latest
     # Higher than go-tests' 20. A cold run measured ~8 min end to end: build
-    # 3:15, lint 2:40, custom-linter build 0:50, vet 0:40, everything else under
-    # 15 s. 30 leaves ~4x headroom for a cold module cache and for the tree to
+    # 3:15, lint 2:40, custom-linter build 0:50, vet 0:40, everything else
+    # under 15 s. 30 leaves ~4x headroom for a cold cache and for the tree to
     # grow, while still failing fast if a step hangs.
     timeout-minutes: 30
     steps:
@@ -46,10 +49,10 @@ jobs:
       # op-core/superchain/chain.go carries `//go:embed superchain-configs.zip`,
       # and that zip is gitignored — it is rebuilt from the superchain-registry
       # commit pinned in superchain-registry-commit.txt. Without it a fresh
-      # checkout cannot compile the package at all ("pattern
-      # superchain-configs.zip: no matching files found"), so every command
-      # below needs this step first. go-tests does not: none of its six trees
-      # import op-core/superchain.
+      # checkout cannot even load the package ("pattern
+      # superchain-configs.zip: no matching files found"), so Build, Vet and
+      # Lint below all need this step first. go-tests does not: none of its
+      # six trees import op-core/superchain.
       #
       # Same command as `just sync-superchain`. Needs git, yq, jq and zip, all
       # preinstalled on the runner image; ~6 s (a shallow clone of the registry).
@@ -93,20 +96,13 @@ jobs:
           (cd linter && "$(go env GOPATH)/bin/golangci-lint" custom)
           ./linter/bin/op-golangci-lint --version
 
-      # The Lint step below does detect unformatted files too — at 2.8.0 `run`
-      # reports the `formatters:` block as "File is not properly formatted
-      # (goimports)" — but it points at a single line and never shows the
-      # rewrite. `fmt --diff` prints the exact diff, exits non-zero, and touches
-      # nothing; it runs no linters and type-checks nothing, so it costs ~10 s
-      # against Lint's ~2m40 and names formatting as the reason the job went red.
-      # Locally, `./linter/bin/op-golangci-lint fmt` (no --diff) applies it.
-      # Same binary and config as Lint, so there is no separate gofmt/goimports
-      # pin to keep in sync.
-      - name: Check formatting
-        run: ./linter/bin/op-golangci-lint fmt --diff
-
       # Mirrors `just lint-go`, minus its `go mod tidy -diff` (out of scope for
-      # PAYROLLUP-137).
+      # PAYROLLUP-137). No separate formatting step: at 2.8.0, `run` already
+      # reports the `formatters:` block as "File is not properly formatted
+      # (goimports)" and fails on it, so a `golangci-lint fmt --diff` step
+      # would just re-report the same failure a second time. Trade-off: a
+      # formatting-only failure now surfaces at Lint's pace instead of in the
+      # ~10s a dedicated step took — see PAYROLLUP-137 if that proves annoying.
       - name: Lint
         run: ./linter/bin/op-golangci-lint run ./...
 

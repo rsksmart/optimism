@@ -126,12 +126,13 @@ the code.
 ## CI / workflows
 
 - Every `rsk/**` PR is gated by `rsk-test.yml`: **`go-checks`** — `go build
-  ./...`, `go vet ./...`, `golangci-lint fmt --diff` and `golangci-lint run
-  ./...` over the whole module — and **`go-tests`**, the scoped suite above.
-  Reproduce it locally with `just lint-go` (which also compiles everything) and
-  `./linter/bin/op-golangci-lint fmt` to apply formatting. Both need the custom
-  linter binary `just lint-go` builds: `.golangci.yaml` enables the `bigint`
-  plugin, and a stock `golangci-lint` refuses the config outright.
+  ./...`, `go vet ./...` and `golangci-lint run ./...` (which also enforces
+  formatting) over the whole module — and **`go-tests`**, the scoped suite
+  above. Reproduce it locally with `just lint-go` (which also compiles
+  everything) and `./linter/bin/op-golangci-lint fmt` to apply formatting.
+  Both need the custom linter binary `just lint-go` builds: `.golangci.yaml`
+  enables the `bigint` plugin, and a stock `golangci-lint` refuses the config
+  outright.
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside
   upstream's, **prefixed `rsk-`** — the filename (`rsk-<thing>.yml`) and the
   `name:` field. This flags them as RSK-owned and avoids filename collisions on
