@@ -27,10 +27,11 @@ jobs:
   # `go build ./...`, `go vet ./...` and `just lint-go`.
   go-checks:
     runs-on: ubuntu-latest
-    # Higher than go-tests' 20: `golangci-lint run ./...` over the whole module
-    # is the long pole (~5 min on a 10-core dev box; this runner has 4), on top
-    # of a cold compile of every package and the one-off custom-linter build.
-    timeout-minutes: 45
+    # Higher than go-tests' 20. A cold run measured ~8 min end to end: build
+    # 3:15, lint 2:40, custom-linter build 0:50, vet 0:40, everything else under
+    # 15 s. 30 leaves ~4x headroom for a cold module cache and for the tree to
+    # grow, while still failing fast if a step hangs.
+    timeout-minutes: 30
     steps:
       # SHA-pinned for supply-chain safety (same pins as go-tests below).
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -96,9 +97,9 @@ jobs:
       # reports the `formatters:` block as "File is not properly formatted
       # (goimports)" — but it points at a single line and never shows the
       # rewrite. `fmt --diff` prints the exact diff, exits non-zero, and touches
-      # nothing; it also runs no linters and type-checks nothing, so it lands in
-      # well under half the time and names formatting as the reason the job went
-      # red. Locally, `./linter/bin/op-golangci-lint fmt` (no --diff) applies it.
+      # nothing; it runs no linters and type-checks nothing, so it costs ~10 s
+      # against Lint's ~2m40 and names formatting as the reason the job went red.
+      # Locally, `./linter/bin/op-golangci-lint fmt` (no --diff) applies it.
       # Same binary and config as Lint, so there is no separate gofmt/goimports
       # pin to keep in sync.
       - name: Check formatting
