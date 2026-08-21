@@ -125,6 +125,14 @@ the code.
 
 ## CI / workflows
 
+- **Optional local pre-push hook** catches unformatted Go code before it even
+  reaches CI: `git config core.hooksPath .githooks` enables
+  `.githooks/pre-push`, which runs `just fmt-check` (`golangci-lint fmt
+  --diff`, non-mutating). Uses the custom linter binary `just build-customlint`
+  produces: `.golangci.yaml` enables the `bigint` plugin, and a stock
+  `golangci-lint` refuses the config outright. Not on by default —
+  `core.hooksPath` is a per-clone setting, not something a repo can force on a
+  contributor.
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside
   upstream's, **prefixed `rsk-`** — the filename (`rsk-<thing>.yml`) and the
   `name:` field. This flags them as RSK-owned and avoids filename collisions on

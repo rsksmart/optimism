@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# RSK fork: block a push that would land unformatted Go code, mirroring the
+# `Lint` step in `rsk-test.yml` (PAYROLLUP-137) without waiting on CI.
+#
+# Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+
+echo "pre-push: checking Go formatting (golangci-lint fmt --diff)"
+just fmt-check

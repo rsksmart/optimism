@@ -44,6 +44,10 @@ lint-go: build-customlint
   ./linter/bin/op-golangci-lint run ./...
   go mod tidy -diff
 
+# Checks Go formatting without modifying files. Used by .githooks/pre-push.
+fmt-check: build-customlint
+  ./linter/bin/op-golangci-lint fmt --diff
+
 # Lints Go code with specific linters and fixes reported issues.
 lint-go-fix: build-customlint
   ./linter/bin/op-golangci-lint run ./... --fix
