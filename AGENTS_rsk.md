@@ -128,9 +128,14 @@ the code.
 - Every `rsk/**` PR is gated by `rsk-test.yml`: **`go-checks`** — `go build
   ./...`, `go vet ./...` and `golangci-lint run ./...` (which also enforces
   formatting) over the whole module — and **`go-tests`**, the scoped suite
-  above. Reproduce it locally with `just lint-go` (which also compiles
-  everything) and `./linter/bin/op-golangci-lint fmt` to apply formatting.
-  Both need the custom linter binary `just lint-go` builds: `.golangci.yaml`
+  above. To reproduce `go-checks` locally, run `just sync-superchain` first:
+  `op-core/superchain/chain.go` embeds a gitignored `superchain-configs.zip`,
+  so on a fresh checkout every package load — build, vet and lint alike —
+  fails without it. Then run `go build ./...`, `go vet ./...` and
+  `just lint-go`, plus `./linter/bin/op-golangci-lint fmt` to apply
+  formatting. `just lint-go` also runs `go mod tidy -diff`, which CI does not:
+  it is stricter than the gate, not a substitute for it. Both lint commands
+  need the custom linter binary `just lint-go` builds: `.golangci.yaml`
   enables the `bigint` plugin, and a stock `golangci-lint` refuses the config
   outright.
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside
