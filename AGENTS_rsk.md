@@ -141,9 +141,12 @@ the code.
 - **Optional local pre-push hook** catches unformatted Go code before it even
   reaches that gate: `git config core.hooksPath .githooks` enables
   `.githooks/pre-push`, which runs `just fmt-check` (`golangci-lint fmt
-  --diff`, non-mutating, same custom binary as above). Not on by default —
-  `core.hooksPath` is a per-clone setting, not something a repo can force on a
-  contributor.
+  --diff`, non-mutating, same custom binary as above) over only the `.go` files
+  the push touches. It reads those files from the working tree, not from the
+  commits being pushed, so an uncommitted edit is what gets checked: a
+  convenience, not a guarantee — `go-checks` stays the real gate. Not on by
+  default — `core.hooksPath` is a per-clone setting, not something a repo can
+  force on a contributor.
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside
   upstream's, **prefixed `rsk-`** — the filename (`rsk-<thing>.yml`) and the
   `name:` field. This flags them as RSK-owned and avoids filename collisions on
