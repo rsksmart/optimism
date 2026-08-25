@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -69,7 +70,7 @@ func TestRSK_EthClient_HeaderVerifierHook(t *testing.T) {
 		err := s.runHeaderVerify(ctx, good)
 		require.ErrorIs(t, err, wantErr)
 		require.NotNil(t, gotHeader)
-		require.Equal(t, uint64(good.Number), gotHeader.Number.Uint64())
+		require.Equal(t, uint64(good.Number), bigs.Uint64Strict(gotHeader.Number))
 	})
 
 	t.Run("non-nil hook overrides the default (accepts a tampered header)", func(t *testing.T) {
