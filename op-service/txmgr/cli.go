@@ -351,10 +351,10 @@ type CLIConfig struct {
 	GasPriceEstimatorFn GasPriceEstimatorFn
 	// UseLegacyTx forces the txmgr to create legacy (type 0) transactions instead of EIP-1559 (type 2).
 	// Required for L1 chains that don't support EIP-1559 transaction types (e.g. RSK).
-	UseLegacyTx       bool
-	BlobTipCapDynamic          bool
-	BlobTipCapPercentile       int
-	BlobTipCapRange            int
+	UseLegacyTx          bool
+	BlobTipCapDynamic    bool
+	BlobTipCapPercentile int
+	BlobTipCapRange      int
 	// WrapBackend optionally wraps the resolved L1 ETHBackend before it is
 	// installed on Config (e.g. with a rate-limiting decorator). nil means no
 	// wrap. Used by non-Ethereum L1 forks that need to throttle requests; the

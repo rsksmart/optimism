@@ -125,12 +125,23 @@ the code.
 
 ## CI / workflows
 
+- Every `rsk/**` PR is gated by `rsk-test.yml`: **`go-checks`** — `go build
+  ./...`, `go vet ./...` and `golangci-lint run ./...` (which also enforces
+  formatting) over the whole module — and **`go-tests`**, the scoped suite
+  above. To reproduce `go-checks` locally, run `just sync-superchain` first:
+  `op-core/superchain/chain.go` embeds a gitignored `superchain-configs.zip`,
+  so on a fresh checkout every package load — build, vet and lint alike —
+  fails without it. Then run `go build ./...`, `go vet ./...` and
+  `just lint-go`, plus `./linter/bin/op-golangci-lint fmt` to apply
+  formatting. `just lint-go` also runs `go mod tidy -diff`, which CI does not:
+  it is stricter than the gate, not a substitute for it. Both lint commands
+  need the custom linter binary `just lint-go` builds: `.golangci.yaml`
+  enables the `bigint` plugin, and a stock `golangci-lint` refuses the config
+  outright.
 - **Optional local pre-push hook** catches unformatted Go code before it even
-  reaches CI: `git config core.hooksPath .githooks` enables
+  reaches that gate: `git config core.hooksPath .githooks` enables
   `.githooks/pre-push`, which runs `just fmt-check` (`golangci-lint fmt
-  --diff`, non-mutating). Uses the custom linter binary `just build-customlint`
-  produces: `.golangci.yaml` enables the `bigint` plugin, and a stock
-  `golangci-lint` refuses the config outright. Not on by default —
+  --diff`, non-mutating, same custom binary as above). Not on by default —
   `core.hooksPath` is a per-clone setting, not something a repo can force on a
   contributor.
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside

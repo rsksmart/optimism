@@ -194,10 +194,12 @@ func setGaugeFromBig(g prometheus.Gauge, v *big.Int) {
 	g.Set(f)
 }
 
-func (t *TxMetrics) RecordBaseFee(baseFee *big.Int)         { setGaugeFromBig(t.baseFee, baseFee) }
-func (t *TxMetrics) RecordBlobBaseFee(blobBaseFee *big.Int) { setGaugeFromBig(t.blobBaseFee, blobBaseFee) }
-func (t *TxMetrics) RecordTipCap(tipCap *big.Int)           { setGaugeFromBig(t.tipCap, tipCap) }
-func (t *TxMetrics) RecordBlobTipCap(blobTipCap *big.Int)   { setGaugeFromBig(t.blobTipCap, blobTipCap) }
+func (t *TxMetrics) RecordBaseFee(baseFee *big.Int) { setGaugeFromBig(t.baseFee, baseFee) }
+func (t *TxMetrics) RecordBlobBaseFee(blobBaseFee *big.Int) {
+	setGaugeFromBig(t.blobBaseFee, blobBaseFee)
+}
+func (t *TxMetrics) RecordTipCap(tipCap *big.Int)         { setGaugeFromBig(t.tipCap, tipCap) }
+func (t *TxMetrics) RecordBlobTipCap(blobTipCap *big.Int) { setGaugeFromBig(t.blobTipCap, blobTipCap) }
 func (t *TxMetrics) RPCError() {
 	t.rpcError.Inc()
 }
