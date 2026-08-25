@@ -13,8 +13,13 @@ if ! command -v just >/dev/null; then
   echo "pre-push: 'just' not found on PATH; run 'mise install', or push with --no-verify" >&2
   exit 1
 fi
-if [ ! -x linter/bin/op-golangci-lint ] && ! command -v golangci-lint >/dev/null; then
-  echo "pre-push: linter/bin/op-golangci-lint is missing and 'golangci-lint' is not on PATH to build it" >&2
+# Same target/sources `linter/justfile` gives uptodate.sh, so this asks the
+# exact question `build-customlint` will: does the binary need (re)building?
+# Covers a stale binary -- e.g. after pulling changes to linter/ -- not just a
+# missing one.
+if ! justfiles/uptodate.sh linter/bin/op-golangci-lint linter/analyzers linter/.custom-gcl.yml 2>/dev/null &&
+   ! command -v golangci-lint >/dev/null; then
+  echo "pre-push: linter/bin/op-golangci-lint needs building and 'golangci-lint' is not on PATH to do it" >&2
   echo "pre-push: run 'mise install' (mise.toml pins both), or push with --no-verify" >&2
   exit 1
 fi
