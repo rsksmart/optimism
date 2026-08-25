@@ -15,7 +15,10 @@ cd "$(git rev-parse --show-toplevel)"
 # file elsewhere in the checkout cannot block a push that has nothing to do
 # with it. Each file is then read from the working tree rather than from the
 # pushed commit -- see the caveat in AGENTS_rsk.md.
-files=""
+#
+# Files are kept paired with the sha of the ref that introduced them, so the
+# staleness note below compares each one against its own push.
+pairs=""
 while read -r _local_ref local_sha _remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue   # ref deletion: nothing to format
 
@@ -29,18 +32,22 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     range="$remote_sha..$local_sha"
   fi
 
-  files+="$(git diff --name-only --diff-filter=ACMR "$range" -- '*.go')"$'\n'
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    pairs+="$local_sha	$f"$'\n'
+  done < <(git diff --name-only --diff-filter=ACMR "$range" -- '*.go')
 done
 
-# Drop duplicates across refs, blank lines, and paths the working tree no
-# longer has (renamed, deleted, or only ever present on another branch).
+# Drop duplicates and paths the working tree no longer has (renamed, deleted,
+# or only ever present on another branch).
 present=""
-while IFS= read -r f; do
+while IFS="	" read -r sha f; do
   if [ -n "$f" ] && [ -f "$f" ]; then
-    present+="$f"$'\n'
+    present+="$sha	$f"$'\n'
   fi
-done < <(printf '%s' "$files" | sort -u)
-files="$present"
+done < <(printf '%s' "$pairs" | sort -u)
+
+files="$(printf '%s' "$present" | cut -f2 | sort -u)"
 
 if [ -z "$files" ]; then
   echo "pre-push: no Go files in this push"
@@ -56,3 +63,22 @@ fi
 
 echo "pre-push: checking Go formatting in $(printf '%s' "$files" | grep -c .) file(s)"
 printf '%s' "$files" | xargs just fmt-check
+
+# Those files were read from the working tree, so a clean result says nothing
+# about one whose committed copy differs -- e.g. after running the formatter to
+# clear this hook and pushing again without committing the fix. One `git diff`
+# per pushed ref, comparing only that ref's own files.
+stale=""
+while IFS= read -r sha; do
+  [ -n "$sha" ] || continue
+  sha_files="$(printf '%s' "$present" | awk -F'\t' -v s="$sha" '$1 == s { print $2 }')"
+  [ -n "$sha_files" ] || continue
+  stale+="$(printf '%s' "$sha_files" | xargs git diff --name-only "$sha" --)"$'\n'
+done < <(printf '%s' "$present" | cut -f1 | sort -u)
+stale="$(printf '%s' "$stale" | sort -u | sed '/^$/d')"
+
+if [ -n "$stale" ]; then
+  echo "pre-push: note: checked your working-tree copy, which differs from the commit being pushed for:" >&2
+  printf '%s\n' "$stale" | sed 's/^/  /' >&2
+  echo "pre-push: commit those changes if you want this check to reflect what lands on the remote" >&2
+fi
