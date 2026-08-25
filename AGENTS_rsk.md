@@ -143,8 +143,9 @@ the code.
   `.githooks/pre-push`, which runs `just fmt-check` (`golangci-lint fmt
   --diff`, non-mutating, same custom binary as above) over only the `.go` files
   the push touches. It reads those files from the working tree, not from the
-  commits being pushed, so an uncommitted edit is what gets checked: a
-  convenience, not a guarantee — `go-checks` stays the real gate. Not on by
+  commits being pushed, so an uncommitted edit is what gets checked; when the
+  two differ it says so, but it stays a convenience rather than a guarantee —
+  `go-checks` is the real gate. Not on by
   default — `core.hooksPath` is a per-clone setting, not something a repo can
   force on a contributor.
 - RSK-added GitHub Actions workflows live in `.github/workflows/` alongside
