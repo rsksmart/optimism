@@ -58,6 +58,15 @@ contract RSKDeployOPChain is Script {
     ///         `DeployOPChain.DEFAULT_INIT_BOND`).
     uint256 public constant DEFAULT_INIT_BOND = 0.08 ether;
 
+    /// @notice Env override injected by rskdeployer.DeployOPChainSplit from
+    ///         `[deployer].dispute_game_init_bond_wei`. Unset → upstream
+    ///         default. It rides the environment (not the ABI input) because
+    ///         `Types.DeployOPChainInput` must stay byte-compatible with
+    ///         upstream `DeployOPChain.run`.
+    function initBond() public view virtual returns (uint256) {
+        return vm.envOr("RSK_DISPUTE_GAME_INIT_BOND_WEI", DEFAULT_INIT_BOND);
+    }
+
     /// @notice Whether the OPCM has SUPER_ROOT_GAMES_MIGRATION enabled.
     bool public isSuperRoot;
 
@@ -194,6 +203,11 @@ contract RSKDeployOPChain is Script {
             challenger: _input.challenger
         });
 
+        // Disabled game types must keep a literal 0 bond (the splitter's
+        // config validation requires it); only the enabled permissioned game
+        // takes the (possibly overridden) bond.
+        uint256 bond = initBond();
+
         IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
             new IOPContractsManagerUtils.DisputeGameConfig[](6);
 
@@ -213,7 +227,7 @@ contract RSKDeployOPChain is Script {
             })
             : IOPContractsManagerUtils.DisputeGameConfig({
                 enabled: true,
-                initBond: DEFAULT_INIT_BOND,
+                initBond: bond,
                 gameType: GameTypes.PERMISSIONED_CANNON,
                 gameArgs: abi.encode(pdgConfig)
             });
@@ -235,7 +249,7 @@ contract RSKDeployOPChain is Script {
         disputeGameConfigs[4] = isSuperRoot
             ? IOPContractsManagerUtils.DisputeGameConfig({
                 enabled: true,
-                initBond: DEFAULT_INIT_BOND,
+                initBond: bond,
                 gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
                 gameArgs: abi.encode(pdgConfig)
             })
