@@ -64,6 +64,7 @@ contract RSKDeployOPChain is Script {
     ///         `Types.DeployOPChainInput` must stay byte-compatible with
     ///         upstream `DeployOPChain.run`.
     function initBond() public view virtual returns (uint256) {
+        // nosemgrep: sol-style-vm-env-only-in-config-sol
         return vm.envOr("RSK_DISPUTE_GAME_INIT_BOND_WEI", DEFAULT_INIT_BOND);
     }
 
