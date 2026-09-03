@@ -1,5 +1,5 @@
 # Go CI for the RSK fork: whole-module static checks, plus a scoped test suite
-# for the packages the fork diverges from upstream in.
+# for RSK-divergent packages and consumer trees.
 #
 # Both jobs run on every PR to rsk/** (and on push to rsk/develop). They are
 # separate jobs so they run in parallel and neither hides the other's result;
@@ -20,8 +20,8 @@ permissions:
 
 jobs:
   # Build, vet and lint EVERY package. `go test` only compiles the packages it
-  # runs, so until this job existed a compile error anywhere outside the six
-  # trees in go-tests passed CI unnoticed (PAYROLLUP-137). rootstack, which
+  # runs, so until this job existed a compile error anywhere outside the eight
+  # scoped trees in go-tests passed CI unnoticed (PAYROLLUP-137). rootstack, which
   # consumes this fork, already ran build and vet before its own tests; this
   # closes the gap on our side. Locally the same checks are `go build ./...`,
   # `go vet ./...` and `just lint-go`.
@@ -52,7 +52,7 @@ jobs:
       # checkout cannot even load the package ("pattern
       # superchain-configs.zip: no matching files found"), so Build, Vet and
       # Lint below all need this step first. go-tests does not: none of its
-      # six trees import op-core/superchain.
+      # scoped trees import op-core/superchain.
       #
       # Same command as `just sync-superchain`. Needs git, yq, jq and zip, all
       # preinstalled on the runner image; ~6 s (a shallow clone of the registry).
@@ -106,7 +106,7 @@ jobs:
       - name: Lint
         run: ./linter/bin/op-golangci-lint run ./...
 
-  # Scoped Go tests for the packages the RSK fork diverges from upstream in.
+  # Scoped Go tests for RSK-divergent packages and consumer trees.
   #
   # A single `go test` over the package paths below covers two things at once:
   # upstream's existing tests, as a regression guard that the fork's changes
@@ -118,6 +118,13 @@ jobs:
   # op-deployer/pkg/deployer/forge is EXCLUDED here: its tests invoke the `forge`
   # binary (Foundry) and compile Solidity, so they need a Foundry-enabled runner.
   # That job exists separately, in rsk-contracts-test.yml.
+  #
+  # op-challenger/... is included with TestLastStepCacheAccuracy skipped because
+  # that inherited upstream test requires ignored/generated outputs
+  # cannon/bin/cannon and cannon/testdata/go-1-24/bin/hello.64.elf (the source
+  # documents `cd cannon && make cannon elf`). The one-shot validation failed
+  # only on those missing artifacts; no RSK code caused it. Do not add a Cannon
+  # build step here because PAYROLLUP-132 forbids adding build/vet/lint work.
   go-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -132,12 +139,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test RSK-divergent packages
+      - name: Test RSK-divergent and consumer trees
         run: |
-          go test -timeout 15m \
+          go test -timeout 15m -skip '^TestLastStepCacheAccuracy$' \
             ./op-node/rollup/derive/... \
             ./op-node/node/... \
             ./op-service/sources/... \
             ./op-service/txmgr/... \
             ./op-deployer/pkg/deployer/broadcaster/... \
-            ./op-proposer/contracts/...
+            ./op-batcher/... \
+            ./op-proposer/... \
+            ./op-challenger/...
