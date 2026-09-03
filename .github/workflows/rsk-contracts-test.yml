@@ -106,18 +106,9 @@ jobs:
         working-directory: packages/contracts-rootstock
         run: forge build
 
-      # Two invocations on purpose: test/isolated/ mutates the process-global
-      # environment (vm.setEnv, and forge has no vm.unsetEnv), which forge's
-      # parallel test runner would let leak into unrelated suites. The
-      # foundry.toml `threads` key does not serialize the runner, so the flag
-      # has to be passed here. See packages/contracts-rootstock/test/isolated/README.md.
       - name: Test contracts-rootstock
         working-directory: packages/contracts-rootstock
-        run: forge test -vv --no-match-path 'test/isolated/*'
-
-      - name: Test contracts-rootstock (isolated, single-threaded)
-        working-directory: packages/contracts-rootstock
-        run: forge test -vv --threads 1 --match-path 'test/isolated/*'
+        run: forge test -vv
 
       # This existing upstream test downloads six public Foundry release
       # archives. Retry only that live-network boundary; do not mask failures in

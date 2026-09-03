@@ -90,16 +90,6 @@ abstract contract RSKOPCTestBase is Test {
     Duration internal maxClockDuration = Duration.wrap(3.5 days);
 
     function setUp() public virtual {
-        // Pin the init-bond env override to the decimal encoding of
-        // DEFAULT_INIT_BOND, so a deploy in this suite is unaffected by an
-        // ambient value in the developer's shell (forge has no vm.unsetEnv,
-        // making "pin to the default" the closest thing to clearing it).
-        // Every suite writes the same value, so these writes cannot race
-        // each other; the tests that write a *different* value are
-        // quarantined in test/isolated/ and run in their own forge
-        // invocation. See test/isolated/README.md.
-        vm.setEnv("RSK_DISPUTE_GAME_INIT_BOND_WEI", "80000000000000000");
-
         deploySuperchain = new DeploySuperchain();
         deployImplementations = new DeployImplementations();
 
