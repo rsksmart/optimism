@@ -83,10 +83,11 @@ contract RSKDeployOPChain is Script {
     }
 
     /// @notice ABI-bytes entry point mirroring upstream `DeployOPChain.runWithBytes`.
-    ///         Lets op-deployer's `forge.NewScriptCaller` invoke `runSplit`
-    ///         through the same `BytesScriptEncoder`/`BytesScriptDecoder`
-    ///         pair it uses for the upstream script — no parallel broadcast
-    ///         parser on the Go side.
+    ///         Byte-for-byte the upstream shape: one ABI-encoded
+    ///         `Types.DeployOPChainInput` in, one encoded `Output` out. Kept
+    ///         so the upstream-parity path stays available and testable;
+    ///         `oprsk-deployer` calls `runSplitWithBytes` instead, which also
+    ///         carries the init bond.
     function runWithBytes(bytes memory _input) public returns (bytes memory) {
         require(_input.length > 0, "RSKDeployOPChain: input cannot be empty");
         Types.DeployOPChainInput memory input = abi.decode(_input, (Types.DeployOPChainInput));
@@ -94,12 +95,45 @@ contract RSKDeployOPChain is Script {
         return abi.encode(output_);
     }
 
+    /// @notice ABI-bytes entry point used by rskdeployer.DeployOPChainSplit.
+    ///         Same as `runWithBytes` plus an explicit init bond for the
+    ///         enabled permissioned game, so the value travels as a typed
+    ///         argument instead of out-of-band. Upstream's
+    ///         `Types.DeployOPChainInput` is untouched — the extra element
+    ///         lives in this RSK-owned entry point's tuple, which is why
+    ///         upstream compatibility is unaffected.
+    /// @param _input `abi.encode(Types.DeployOPChainInput, uint256 initBond)`.
+    function runSplitWithBytes(bytes memory _input) public returns (bytes memory) {
+        require(_input.length > 0, "RSKDeployOPChain: input cannot be empty");
+        (Types.DeployOPChainInput memory input, uint256 bond) =
+            abi.decode(_input, (Types.DeployOPChainInput, uint256));
+        Output memory output_ = runSplitWithBond(input, bond);
+        return abi.encode(output_);
+    }
+
     /// @notice Drop-in replacement for upstream `DeployOPChain.run(input)`,
     ///         except the single `OPContractsManagerV2.deploy(config)` call
-    ///         is replaced by a splitter deploy + 5 stage broadcasts.
+    ///         is replaced by a splitter deploy + 5 stage broadcasts. Uses the
+    ///         upstream default init bond; `runSplitWithBond` takes an
+    ///         explicit one.
     /// @param _input Same `Types.DeployOPChainInput` upstream uses.
     /// @return output_ Same `Output` shape upstream emits.
     function runSplit(Types.DeployOPChainInput memory _input) public returns (Output memory output_) {
+        output_ = runSplitWithBond(_input, DEFAULT_INIT_BOND);
+    }
+
+    /// @notice `runSplit` with the dispute-game init bond supplied explicitly.
+    ///         Callers that read the bond from configuration (oprsk-deployer)
+    ///         resolve the effective value on the Go side and pass it here, so
+    ///         this script has no notion of "unset".
+    /// @param _input Same `Types.DeployOPChainInput` upstream uses.
+    /// @param _initBond Init bond in wei for the enabled permissioned game
+    ///        type. Disabled game types always get 0 regardless.
+    /// @return output_ Same `Output` shape upstream emits.
+    function runSplitWithBond(Types.DeployOPChainInput memory _input, uint256 _initBond)
+        public
+        returns (Output memory output_)
+    {
         checkInput(_input);
 
         require(address(_input.opcm).code.length > 0, "RSKDeployOPChain: OPCM address has no code");
@@ -117,7 +151,7 @@ contract RSKDeployOPChain is Script {
         IOPContractsManagerMigrator migrator = opcmV2.opcmMigrator();
 
         // Build the FullConfig identically to upstream `_toOPCMV2DeployInput`.
-        RSKOPCMSplitter.FullConfig memory cfg = _toFullConfig(_input);
+        RSKOPCMSplitter.FullConfig memory cfg = _toFullConfig(_input, _initBond);
 
         // ----------- BROADCAST 1 — deploy the splitter -----------
         vm.broadcast(msg.sender);
@@ -177,7 +211,7 @@ contract RSKDeployOPChain is Script {
     // — the field shapes are identical by construction.
     // ---------------------------------------------------------------------
 
-    function _toFullConfig(Types.DeployOPChainInput memory _input)
+    function _toFullConfig(Types.DeployOPChainInput memory _input, uint256 _initBond)
         internal
         view
         returns (RSKOPCMSplitter.FullConfig memory cfg_)
@@ -193,6 +227,11 @@ contract RSKDeployOPChain is Script {
             proposer: _input.proposer,
             challenger: _input.challenger
         });
+
+        // Disabled game types must keep a literal 0 bond (the splitter's
+        // config validation requires it); only the enabled permissioned game
+        // takes the configured bond.
+        uint256 bond = _initBond;
 
         IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
             new IOPContractsManagerUtils.DisputeGameConfig[](6);
@@ -213,7 +252,7 @@ contract RSKDeployOPChain is Script {
             })
             : IOPContractsManagerUtils.DisputeGameConfig({
                 enabled: true,
-                initBond: DEFAULT_INIT_BOND,
+                initBond: bond,
                 gameType: GameTypes.PERMISSIONED_CANNON,
                 gameArgs: abi.encode(pdgConfig)
             });
@@ -235,7 +274,7 @@ contract RSKDeployOPChain is Script {
         disputeGameConfigs[4] = isSuperRoot
             ? IOPContractsManagerUtils.DisputeGameConfig({
                 enabled: true,
-                initBond: DEFAULT_INIT_BOND,
+                initBond: bond,
                 gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
                 gameArgs: abi.encode(pdgConfig)
             })
