@@ -24,6 +24,14 @@ import (
 
 type StubDGFContract struct {
 	hasProposedCount int
+	gameExistsCount  int
+	gameExists       bool
+	gameExistsErr    error
+}
+
+func (m *StubDGFContract) GameExists(_ context.Context, _ uint32, _ common.Hash, _ []byte) (bool, error) {
+	m.gameExistsCount++
+	return m.gameExists, m.gameExistsErr
 }
 
 func (m *StubDGFContract) HasProposedSince(_ context.Context, _ common.Address, _ time.Time, _ uint32) (bool, time.Time, common.Hash, error) {
@@ -131,4 +139,111 @@ func TestL2OutputSubmitter_OutputRetry(t *testing.T) {
 	require.Len(t, logs.FindLogs(testlog.NewMessageContainsFilter("Error getting proposal")), numFails)
 	require.NotNil(t, logs.FindLog(testlog.NewMessageFilter("Proposer tx successfully published")))
 	require.NotNil(t, logs.FindLog(testlog.NewMessageFilter("loop returning")))
+}
+
+// setupFetchOnly builds a submitter for exercising FetchDGFOutput directly.
+// setup() registers a one-shot Send expectation that only loop() satisfies, so
+// reusing it here would fail on unmet expectations.
+func setupFetchOnly(t *testing.T) (*L2OutputSubmitter, *mockRollupEndpointProvider, *StubDGFContract, *testlog.CapturingHandler) {
+	ep := newEndpointProvider()
+	tm := txmgrmocks.NewTxManager(t)
+	tm.On("From").Return(common.Address{0xab}).Maybe()
+
+	lgr, logs := testlog.CaptureLogger(t, log.LevelDebug)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	ps := &L2OutputSubmitter{
+		DriverSetup: DriverSetup{
+			Log:  lgr,
+			Metr: metrics.NoopMetrics,
+			Cfg: ProposerConfig{
+				PollInterval:     time.Microsecond,
+				ProposalInterval: time.Microsecond,
+			},
+			Txmgr:          tm,
+			ProposalSource: source.NewRollupProposalSource(ep),
+		},
+		done:   make(chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
+	}
+	stub := new(StubDGFContract)
+	ps.dgfContract = stub
+	return ps, ep, stub, logs
+}
+
+func expectOutputAt(ep *mockRollupEndpointProvider, blockNum uint64, times int) {
+	ep.rollupClient.On("SyncStatus").
+		Return(&eth.SyncStatus{FinalizedL2: eth.L2BlockRef{Number: blockNum}}, nil).Times(times)
+	ep.rollupClient.ExpectOutputAtBlock(
+		blockNum,
+		&eth.OutputResponse{
+			Version:  eth.OutputVersionV0,
+			BlockRef: eth.L2BlockRef{Number: blockNum},
+			Status: &eth.SyncStatus{
+				CurrentL1:   eth.L1BlockRef{Hash: common.Hash{}},
+				FinalizedL2: eth.L2BlockRef{Number: blockNum},
+			},
+		},
+		nil,
+	).Times(times)
+}
+
+func TestFetchDGFOutput_SkipsWhenGameAlreadyExists(t *testing.T) {
+	ps, ep, dgf, logs := setupFetchOnly(t)
+	expectOutputAt(ep, 42, 1)
+	dgf.gameExists = true
+
+	_, shouldPropose, err := ps.FetchDGFOutput(context.Background())
+
+	require.NoError(t, err)
+	require.False(t, shouldPropose, "must not propose into an occupied slot")
+	require.Equal(t, 1, dgf.gameExistsCount)
+	require.NotNil(t, logs.FindLog(testlog.NewMessageContainsFilter("a game already exists")))
+}
+
+func TestFetchDGFOutput_ProposesWhenSlotIsFree(t *testing.T) {
+	ps, ep, dgf, _ := setupFetchOnly(t)
+	expectOutputAt(ep, 42, 1)
+	dgf.gameExists = false
+
+	output, shouldPropose, err := ps.FetchDGFOutput(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, shouldPropose)
+	require.Equal(t, uint64(42), output.SequenceNum)
+	require.Equal(t, 1, dgf.gameExistsCount)
+}
+
+func TestFetchDGFOutput_GameExistsErrorSkipsTick(t *testing.T) {
+	ps, ep, dgf, _ := setupFetchOnly(t)
+	expectOutputAt(ep, 42, 1)
+	dgf.gameExistsErr = fmt.Errorf("TEST: L1 unreachable")
+
+	_, shouldPropose, err := ps.FetchDGFOutput(context.Background())
+
+	require.ErrorContains(t, err, "could not check whether a game already exists")
+	require.False(t, shouldPropose)
+}
+
+// The regression that matters: a stalled finalized head offers the same
+// (root, sequenceNum) on two consecutive intervals. The first proposal lands,
+// the second must be skipped rather than reverting GameAlreadyExists on-chain.
+// Note this needs no restart — a stall alone reproduces it.
+func TestFetchDGFOutput_StalledFinalizedHeadProposesOnlyOnce(t *testing.T) {
+	ps, ep, dgf, _ := setupFetchOnly(t)
+	expectOutputAt(ep, 42, 2)
+
+	_, shouldPropose, err := ps.FetchDGFOutput(context.Background())
+	require.NoError(t, err)
+	require.True(t, shouldPropose, "first proposal for a free slot")
+
+	// The proposal landed, so the factory slot is now taken.
+	dgf.gameExists = true
+
+	_, shouldPropose, err = ps.FetchDGFOutput(context.Background())
+	require.NoError(t, err)
+	require.False(t, shouldPropose, "second attempt at the same root must be skipped")
+	require.Equal(t, 2, dgf.gameExistsCount)
 }
