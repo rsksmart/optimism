@@ -22,6 +22,7 @@ const (
 	methodInitBonds   = "initBonds"
 	methodCreateGame  = "create"
 	methodVersion     = "version"
+	methodGames       = "games"
 
 	methodClaim = "claimData"
 )
@@ -103,6 +104,24 @@ func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer comm
 			return false, time.Time{}, common.Hash{}, nil
 		}
 	}
+}
+
+// GameExists reports whether a game already occupies the factory slot for this
+// (gameType, rootClaim, extraData) triple.
+//
+// This is the exact predicate create() reverts on: the slot is keyed by
+// keccak256(abi.encode(gameType, rootClaim, extraData)) and is never cleared, so
+// a resolved game still blocks re-proposing the same output root at the same
+// sequence number. It is also proposer-independent, so unlike HasProposedSince —
+// which matches on the proposer address — it sees a slot taken by someone else.
+func (f *DisputeGameFactory) GameExists(ctx context.Context, gameType uint32, rootClaim common.Hash, extraData []byte) (bool, error) {
+	cCtx, cancel := context.WithTimeout(ctx, f.networkTimeout)
+	defer cancel()
+	result, err := f.caller.SingleCall(cCtx, rpcblock.Latest, f.contract.Call(methodGames, gameType, rootClaim, extraData))
+	if err != nil {
+		return false, fmt.Errorf("failed to look up existing game: %w", err)
+	}
+	return result.GetAddress(0) != (common.Address{}), nil
 }
 
 func (f *DisputeGameFactory) ProposalTx(ctx context.Context, gameType uint32, outputRoot common.Hash, extraData []byte) (txmgr.TxCandidate, error) {
