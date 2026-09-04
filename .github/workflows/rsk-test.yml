@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   # Build, vet and lint EVERY package. `go test` only compiles the packages it
-  # runs, so until this job existed a compile error anywhere outside the eight
+  # runs, so until this job existed a compile error anywhere outside the
   # scoped trees in go-tests passed CI unnoticed (PAYROLLUP-137). rootstack, which
   # consumes this fork, already ran build and vet before its own tests; this
   # closes the gap on our side. Locally the same checks are `go build ./...`,
@@ -121,6 +121,10 @@ jobs:
   #
   # TestLastStepCacheAccuracy needs gitignored cannon artifacts and its package
   # imports no RSK-edited code, so skipping it loses no signal (PAYROLLUP-132).
+  #
+  # op-deployer bootstrap, manage, opcm, pipeline, verify and integration_test
+  # need forge-artifacts or the synced superchain registry, so they stay with
+  # the Foundry tier (PAYROLLUP-132).
   go-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -138,11 +142,18 @@ jobs:
       - name: Test RSK-divergent and consumer trees
         run: |
           go test -timeout 15m -skip '^TestLastStepCacheAccuracy$' \
-            ./op-node/rollup/derive/... \
-            ./op-node/node/... \
+            ./op-node/... \
             ./op-service/sources/... \
             ./op-service/txmgr/... \
             ./op-deployer/pkg/deployer/broadcaster/... \
+            ./op-deployer/pkg/deployer \
+            ./op-deployer/pkg/deployer/artifacts/... \
+            ./op-deployer/pkg/deployer/clean/... \
+            ./op-deployer/pkg/deployer/standard/... \
+            ./op-deployer/pkg/deployer/state/... \
+            ./op-deployer/pkg/deployer/upgrade/embedded/... \
+            ./op-deployer/pkg/deployer/upgrade/v2_0_0/... \
+            ./op-deployer/pkg/deployer/validate/... \
             ./op-batcher/... \
             ./op-proposer/... \
             ./op-challenger/...
