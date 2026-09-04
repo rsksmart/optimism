@@ -119,12 +119,8 @@ jobs:
   # binary (Foundry) and compile Solidity, so they need a Foundry-enabled runner.
   # That job exists separately, in rsk-contracts-test.yml.
   #
-  # op-challenger/... is included with TestLastStepCacheAccuracy skipped because
-  # that inherited upstream test requires ignored/generated outputs
-  # cannon/bin/cannon and cannon/testdata/go-1-24/bin/hello.64.elf (the source
-  # documents `cd cannon && make cannon elf`). The one-shot validation failed
-  # only on those missing artifacts; no RSK code caused it. Do not add a Cannon
-  # build step here because PAYROLLUP-132 forbids adding build/vet/lint work.
+  # TestLastStepCacheAccuracy needs gitignored cannon artifacts and its package
+  # imports no RSK-edited code, so skipping it loses no signal (PAYROLLUP-132).
   go-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
