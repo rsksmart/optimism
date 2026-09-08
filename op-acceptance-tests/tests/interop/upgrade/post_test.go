@@ -49,7 +49,7 @@ func TestPostInteropUpgradeComprehensive(gt *testing.T) {
 	sys.L2B.WaitForBlock()
 
 	// Get interop activation time
-	interopTime := sys.L2A.Escape().ChainConfig().LagoonTime
+	interopTime := sys.L2A.Escape().ChainConfig().InteropTime
 	require.NotNil(interopTime, "InteropTime must be set")
 
 	logger.Info("Starting comprehensive post-interop upgrade tests", "interopTime", *interopTime)
@@ -77,7 +77,7 @@ func testActivationCrossSafe(t devtest.T, sys *presets.TwoL2SupernodeInterop) {
 
 	devtest.RunParallel(t, []*dsl.L2Network{sys.L2A, sys.L2B}, func(t devtest.T, net *dsl.L2Network) {
 		// Gate test to not time out before upgrade happens
-		forkTimestamp := net.Escape().ChainConfig().LagoonTime
+		forkTimestamp := net.Escape().ChainConfig().InteropTime
 		t.Gate().NotNil(forkTimestamp, "Must have fork configured")
 		t.Gate().Greater(*forkTimestamp, uint64(0), "Must not start fork at genesis")
 		upgradeTime := time.Unix(int64(*forkTimestamp), 0)

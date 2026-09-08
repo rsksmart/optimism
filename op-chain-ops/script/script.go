@@ -242,7 +242,7 @@ func NewHost(
 		HoloceneTime: nil,
 		JovianTime:   nil,
 		KarstTime:    nil,
-		LagoonTime:   nil,
+		InteropTime:  nil,
 		Optimism:     nil,
 	}
 
