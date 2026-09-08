@@ -41,7 +41,7 @@ func GeneratePreState(ctx context.Context, pEnv *Env, globalIntent *state.Intent
 			return fmt.Errorf("failed to marshal genesis config: %w", err)
 		}
 
-		if genesis.Config.InteropTime != nil {
+		if genesis.Config.LagoonTime != nil {
 			generateDepSet = true
 		}
 
