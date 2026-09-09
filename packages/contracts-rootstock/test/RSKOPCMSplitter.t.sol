@@ -2,9 +2,11 @@
 pragma solidity 0.8.15;
 
 import {IProxyAdmin} from "interfaces/universal/IProxyAdmin.sol";
+import {IDisputeGame} from "interfaces/dispute/IDisputeGame.sol";
 import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
+import {IFaultDisputeGame} from "interfaces/dispute/IFaultDisputeGame.sol";
 import {Features} from "src/libraries/Features.sol";
-import {GameTypes} from "src/dispute/lib/Types.sol";
+import {Claim, GameStatus, GameTypes} from "src/dispute/lib/Types.sol";
 
 import {RSKOPCMSplitter} from "../contracts/RSKOPCMSplitter.sol";
 import {RSKOPCTestBase} from "./helpers/RSKOPCTestBase.sol";
@@ -172,6 +174,28 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
         assertEq(splitter.phase(), 2);
+    }
+
+    function test_bondZero_gameCreatesAndResolves() public {
+        fullConfig.disputeGameConfigs[1].initBond = 0;
+        RSKOPCMSplitter.ChainContracts memory cts = _runSplitter();
+
+        IDisputeGameFactory dgf = IDisputeGameFactory(cts.disputeGameFactory);
+        assertEq(dgf.initBonds(GameTypes.PERMISSIONED_CANNON), 0);
+
+        // With a non-zero bond this zero-value create would revert with
+        // IncorrectBondAmount; PermissionedDisputeGame requires tx.origin to
+        // be the proposer, hence the two-argument prank.
+        vm.prank(proposer, proposer);
+        IDisputeGame game =
+            dgf.create{value: 0}(GameTypes.PERMISSIONED_CANNON, Claim.wrap(bytes32(uint256(1))), abi.encode(uint256(1)));
+
+        vm.warp(block.timestamp + maxClockDuration.raw() + 1);
+        IFaultDisputeGame(address(game)).resolveClaim(0, 0);
+        game.resolve();
+
+        assertEq(uint8(game.status()), uint8(GameStatus.DEFENDER_WINS));
+        assertEq(IFaultDisputeGame(address(game)).credit(proposer), 0);
     }
 
     function test_lateCollaboratorFailure_isAtomicAndRetryable() public {
