@@ -12,10 +12,10 @@
 
 Copilot and Codex already report the nitpicks. Look for what they cannot see:
 
-- [ ] Does it solve the ticket, and only the ticket?
-- [ ] Are the business rules and invariants right?
-- [ ] Does it fit our architecture, boundaries and domain language?
-- [ ] Rollout: migrations, flags, backwards compatibility, revert path.
-- [ ] Peer test it. Do not only read the diff.
+- [ ] Solves the ticket, and only the ticket
+- [ ] Business rules and invariants are right
+- [ ] Fits our architecture, boundaries and domain language
+- [ ] Rollout is covered: migrations, flags, backwards compatibility, revert path
+- [ ] Peer tested, not only read
 
 Add `blocking` if the PR holds up the team, `postponed` if the review can wait.
