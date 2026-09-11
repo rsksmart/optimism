@@ -119,12 +119,16 @@ jobs:
   # binary (Foundry) and compile Solidity, so they need a Foundry-enabled runner.
   # That job exists separately, in rsk-contracts-test.yml.
   #
-  # TestLastStepCacheAccuracy needs gitignored cannon artifacts and its package
-  # imports no RSK-edited code, so skipping it loses no signal (PAYROLLUP-132).
+  # TestLastStepCacheAccuracy is skipped: it needs gitignored cannon artifacts
+  # (`cd cannon && make cannon elf`), and it only exercises cannon step caching,
+  # so it runs no txmgr/sources code. Its package does depend on both, through
+  # op-program/host/kvstore, so do not read the skip as "no RSK code here"
+  # (PAYROLLUP-132).
   #
   # op-deployer bootstrap, manage, opcm, pipeline, verify and integration_test
-  # need forge-artifacts or the synced superchain registry, so they stay with
-  # the Foundry tier (PAYROLLUP-132).
+  # are EXCLUDED here and not run by rsk-contracts-test.yml either: they need
+  # forge-artifacts or the synced superchain registry, so covering them means
+  # a Foundry-enabled job (PAYROLLUP-132).
   go-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
