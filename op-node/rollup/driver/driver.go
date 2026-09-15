@@ -120,8 +120,11 @@ func NewDriver(
 		// Connect origin selector to the engine controller for force reset notifications
 		ec.SetOriginSelectorResetter(findL1Origin)
 
-		sequencer = sequencing.NewSequencer(driverCtx, log, cfg, driverCfg.SequencerSealingDuration, attrBuilder, findL1Origin,
+		seq := sequencing.NewSequencer(driverCtx, log, cfg, driverCfg.SequencerSealingDuration, attrBuilder, findL1Origin,
 			sequencerStateListener, sequencerConductor, asyncGossiper, metrics, ec)
+		// Follow-source never steps the pipeline, so a hold there would never be released.
+		seq.SetDerivationEnabled(!syncCfg.FollowSourceEnabled())
+		sequencer = seq
 		sys.Register("sequencer", sequencer)
 	} else {
 		sequencer = sequencing.DisabledSequencer{}

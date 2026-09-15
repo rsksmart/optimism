@@ -123,6 +123,22 @@ type Sequencer struct {
 	latestSealed eth.L2BlockRef
 	latestHead   eth.L2BlockRef
 
+	// headBeforeReset is the unsafe head known when the last reset signal arrived. A reset that
+	// confirms an engine head below it (the execution engine lost its state and came back
+	// rewound) must not be sequenced on: the new blocks would fork away from the batches already
+	// on L1. Zero at the first reset after start-up, which is held too: op-node persists no
+	// unsafe head, so it cannot tell a healthy engine from one that rewound while it was down.
+	headBeforeReset eth.L2BlockRef
+	// resetPending scopes the check above to confirmations that follow a reset signal; the
+	// follow-source initial reset and interop replacements confirm without one and never hold.
+	resetPending bool
+	// awaitingDerivation holds sequencing until derivation is idle (DeriverIdleEvent), i.e.
+	// until the canonical chain has been rebuilt from L1.
+	awaitingDerivation bool
+	// derivationEnabled gates the hold: with the pipeline disabled (follow-source) no
+	// DeriverIdleEvent is ever emitted, so holding would never end. Set by the driver.
+	derivationEnabled bool
+
 	latestHeadSet chan struct{}
 
 	// toBlockRef converts a payload to a block-ref, and is only configurable for test-purposes
@@ -202,6 +218,8 @@ func (d *Sequencer) OnEvent(ctx context.Context, ev event.Event) bool {
 		d.onReset(x)
 	case engine.EngineResetConfirmedEvent:
 		d.onEngineResetConfirmedEvent(x)
+	case derive.DeriverIdleEvent:
+		d.onDeriverIdle(x)
 	case engine.ForkchoiceUpdateEvent:
 		d.onForkchoiceUpdate(x)
 	case engine.ForkchoiceUpdateInitEvent:
@@ -355,6 +373,12 @@ func (d *Sequencer) onPayloadSuccess(x engine.PayloadSuccessEvent) {
 
 func (d *Sequencer) onSequencerAction(ev SequencerActionEvent) {
 	d.log.Debug("Sequencer action")
+	if d.awaitingDerivation {
+		// whatever re-armed the timer (a temporary error, a start request): not until derivation is idle
+		d.log.Debug("Sequencer action skipped, waiting for derivation to catch up after engine reset")
+		d.nextActionOK = false
+		return
+	}
 	payload := d.asyncGossip.Get()
 	if payload != nil {
 		if d.latest.Info.ID == (eth.PayloadID{}) {
@@ -433,15 +457,56 @@ func (d *Sequencer) onReset(x rollup.ResetEvent) {
 	d.latest = BuildingState{}
 	// no action to perform until we get a reset-confirmation
 	d.nextActionOK = false
+	// Snapshot now: the forkchoice update that precedes the reset confirmation already moves
+	// latestHead. While held, latestHead tracks the chain derivation is rebuilding, which is
+	// below where we were, so keep the original snapshot as the bar to clear.
+	if !d.awaitingDerivation {
+		d.headBeforeReset = d.latestHead
+	}
+	d.resetPending = true
 }
 
-func (d *Sequencer) onEngineResetConfirmedEvent(engine.EngineResetConfirmedEvent) {
+func (d *Sequencer) onEngineResetConfirmedEvent(x engine.EngineResetConfirmedEvent) {
+	// Below the head we were on (or no head known yet): wait for derivation to rebuild the
+	// canonical chain from L1 rather than sequence a fork of it. See headBeforeReset.
+	rewound := d.resetPending && x.LocalUnsafe != d.headBeforeReset
+	d.resetPending = false
+	if d.awaitingDerivation || (rewound && d.derivationEnabled) {
+		d.awaitingDerivation = true
+		d.nextActionOK = false
+		d.log.Warn("Engine reset confirmed on a rewound or unknown head, sequencer waits for derivation to catch up with L1",
+			"reset_unsafe", x.LocalUnsafe, "reset_safe", x.CrossSafe, "prev_head", d.headBeforeReset)
+		return
+	}
 	d.nextActionOK = d.active.Load()
 	// Before sequencing we can wait a block,
 	// assuming the execution-engine just churned through some work for the reset.
 	// This will also prevent any potential reset-loop from running too hot.
 	d.nextAction = d.timeNow().Add(time.Second * time.Duration(d.rollupCfg.BlockTime))
 	d.log.Info("Engine reset confirmed, sequencer may continue", "next", d.nextActionOK)
+}
+
+func (d *Sequencer) onDeriverIdle(x derive.DeriverIdleEvent) {
+	if !d.awaitingDerivation {
+		return
+	}
+	// Only a coarse filter: an L1 endpoint answering "not found" early idles the pipeline
+	// below where we were anchored. It does not prove the pre-reset blocks are re-derived.
+	if x.Origin.Number < d.headBeforeReset.L1Origin.Number {
+		d.log.Debug("Derivation idle below the pre-reset L1 origin, sequencer keeps waiting",
+			"l1_origin", x.Origin, "prev_origin", d.headBeforeReset.L1Origin)
+		return
+	}
+	d.awaitingDerivation = false
+	// Anything sealed before the reset is not on this chain: drop it rather than replay it, and
+	// do not make Stop wait for it either.
+	d.asyncGossip.Clear()
+	d.latestSealed = d.latestHead
+	// same one-block delay as an ordinary reset confirmation
+	d.nextActionOK = d.active.Load()
+	d.nextAction = d.timeNow().Add(time.Second * time.Duration(d.rollupCfg.BlockTime))
+	d.log.Info("Derivation caught up with L1 after engine reset, sequencer may continue",
+		"head", d.latestHead, "l1_origin", x.Origin, "next", d.nextActionOK)
 }
 
 func (d *Sequencer) onForkchoiceUpdate(x engine.ForkchoiceUpdateEvent) {
@@ -465,7 +530,8 @@ func (d *Sequencer) onForkchoiceUpdate(x engine.ForkchoiceUpdateEvent) {
 		// The cleared state will block further BuildStarted/BuildSealed responses from continuing the stale build job.
 		d.latest = BuildingState{}
 	}
-	if x.UnsafeL2Head.Number > d.latestHead.Number {
+	// while held, derivation moves the head with every block it inserts: track it, do not schedule
+	if !d.awaitingDerivation && x.UnsafeL2Head.Number > d.latestHead.Number {
 		d.nextActionOK = true
 		now := d.timeNow()
 		blockTime := time.Duration(d.rollupCfg.BlockTime) * time.Second
@@ -708,7 +774,8 @@ func (d *Sequencer) forceStart() error {
 	}
 	// clear the building state; interrupting any existing sequencing job (there should never be one)
 	d.latest = BuildingState{}
-	d.nextActionOK = true
+	// while held, the action would only be skipped: leave the timer disarmed until derivation is idle
+	d.nextActionOK = !d.awaitingDerivation
 	d.nextAction = d.timeNow()
 	d.active.Store(true)
 	d.metrics.SetSequencerState(true)
@@ -729,6 +796,11 @@ func (d *Sequencer) Stop(ctx context.Context) (common.Hash, error) {
 	// ensure latestHead has been updated to the latest sealed/gossiped block before stopping the sequencer
 	for d.latestHead.Hash != d.latestSealed.Hash {
 
+		// while held the last sealed block is off the chain being rebuilt; the head will not reach it
+		if d.awaitingDerivation {
+			d.log.Warn("Sequencer is waiting for derivation after an engine reset, skipping head sync wait")
+			break
+		}
 		// if we are not the leader, latestSealed will never be updated and we will wait forever
 		if isLeader, err := d.conductor.Leader(ctx); err != nil {
 			d.log.Warn("Could not determine leadership while stopping. Skipping wait.", "err", err)
@@ -770,6 +842,14 @@ func (d *Sequencer) Stop(ctx context.Context) (common.Hash, error) {
 	d.metrics.SetSequencerState(false)
 	d.log.Info("Sequencer has been stopped")
 	return d.latestHead.Hash, nil
+}
+
+// SetDerivationEnabled tells the sequencer whether the derivation pipeline runs in this
+// configuration. It does not in follow-source mode, where nothing would release a hold.
+func (d *Sequencer) SetDerivationEnabled(enabled bool) {
+	d.l.Lock()
+	defer d.l.Unlock()
+	d.derivationEnabled = enabled
 }
 
 func (d *Sequencer) SetMaxSafeLag(ctx context.Context, v uint64) error {
