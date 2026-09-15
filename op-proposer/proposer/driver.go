@@ -39,6 +39,7 @@ type DGFContract interface {
 	Version(ctx context.Context) (string, error)
 	HasProposedSince(ctx context.Context, proposer common.Address, cutoff time.Time, gameType uint32) (bool, time.Time, common.Hash, error)
 	ProposalTx(ctx context.Context, gameType uint32, outputRoot common.Hash, extraData []byte) (txmgr.TxCandidate, error)
+	GameExists(ctx context.Context, gameType uint32, rootClaim common.Hash, extraData []byte) (bool, error)
 }
 
 type RollupClient interface {
@@ -187,6 +188,27 @@ func (l *L2OutputSubmitter) FetchDGFOutput(ctx context.Context) (source.Proposal
 	output, err := l.FetchOutput(ctx, currentBlockNumber)
 	if err != nil {
 		return source.Proposal{}, false, fmt.Errorf("could not fetch output at current block number %d: %w", currentBlockNumber, err)
+	}
+
+	// HasProposedSince above is a recency check on (gameType, proposer): it cannot
+	// tell whether this exact (root, sequenceNum) pair was already proposed, and it
+	// returns a zero claim on every branch that reaches this far, which left the
+	// comparison below unreachable. Ask the factory the question create() will
+	// actually revert on.
+	gameExists, err := l.dgfContract.GameExists(ctx, l.Cfg.DisputeGameType, output.Root, output.ExtraData())
+	if err != nil {
+		// Skip this tick and retry on the next poll, as with the recency check
+		// above. Proposing anyway would put the txmgr into a long revert-retry
+		// loop against a slot that can never free up.
+		return source.Proposal{}, false, fmt.Errorf("could not check whether a game already exists: %w", err)
+	}
+	if gameExists {
+		// Abnormal rather than routine: on a healthy chain the finalized head
+		// advances, so the output root differs every interval. Reaching here means
+		// it stalled, or another proposer took the slot.
+		l.Log.Warn("Skipping proposal: a game already exists for this output root and sequence number",
+			"sequenceNum", output.SequenceNum, "output_root", output.Root, "game_type", l.Cfg.DisputeGameType)
+		return source.Proposal{}, false, nil
 	}
 
 	if claim == output.Root {

@@ -38,6 +38,7 @@ const (
 	rskMethodGameCount   = "gameCount"
 	rskMethodGameAtIndex = "gameAtIndex"
 	rskMethodClaim       = "claimData"
+	rskMethodGames       = "games"
 )
 
 var (
@@ -172,4 +173,42 @@ func TestRSK_HasProposedSince_SurfacesContextError(t *testing.T) {
 	proposed, _, _, err := factory.HasProposedSince(context.Background(), rskProposerAddr, cutoff, 0)
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, proposed)
+}
+
+// TestRSK_GameExists covers the fork-added GameExists lookup, which asks the
+// factory the same question create() reverts GameAlreadyExists on: is the slot
+// keyed by (gameType, rootClaim, extraData) already taken?
+func TestRSK_GameExists(t *testing.T) {
+	const gameType = uint32(1)
+	rootClaim := common.Hash{0xaa}
+	// The 32-byte big-endian sequence number, exactly as source.Proposal.ExtraData
+	// builds it. Asserted here so a change to that encoding breaks this test
+	// rather than silently probing the wrong factory slot.
+	extraData := common.BigToHash(big.NewInt(42)).Bytes()
+
+	tests := []struct {
+		name  string
+		proxy common.Address
+		want  bool
+	}{
+		{name: "occupied slot", proxy: common.Address{0xce}, want: true},
+		{name: "free slot", proxy: common.Address{}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// failIdx -1: no gameAtIndex call fails, so this is the plain factory.
+			stubRpc, factory := rskSetupFactory(t, -1, nil)
+			// SetResponse asserts the call's decoded arguments, so an incorrect
+			// (gameType, rootClaim, extraData) key fails the test rather than
+			// falling through to a canned answer.
+			stubRpc.SetResponse(rskFactoryAddr, rskMethodGames, rpcblock.Latest,
+				[]interface{}{gameType, rootClaim, extraData},
+				[]interface{}{tt.proxy, uint64(1234)})
+
+			exists, err := factory.GameExists(context.Background(), gameType, rootClaim, extraData)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, exists)
+		})
+	}
 }
