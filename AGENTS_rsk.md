@@ -43,6 +43,14 @@ wherever they conflict.** Read this before acting on anything in those files.
   work rebased out, or the goal narrowed), retitle it to match what actually
   lands. A title that describes work no longer in the diff ships a misleading
   commit onto `rsk/develop` and pollutes the changelog.
+- **Write the PR body to the structure in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).**
+  `gh pr create --body` replaces the whole body, so GitHub's own template
+  auto-fill (web UI, `gh pr create` without `--body`) never kicks in — match
+  its sections yourself.
+- **Never tick a checklist box in that template**, even one you actually ran
+  (`/simplify`, `/code-review`, `/security-review`, diff reviewed, etc.).
+  Those are the human's own attestation, not a record that the step exists.
+  Leave every box `[ ]`; they tick them.
 
 ## Merge model
 
