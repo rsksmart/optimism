@@ -393,7 +393,13 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         }
 
         // Lines 816-827 — ETHLockbox (conditional).
-        if (isInitialDeployment || _cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
+        // RSK: gate on the feature flag alone (dropped upstream's
+        // `_isInitialDeployment ||`). The interop branch above sets
+        // ETH_LOCKBOX before this point, so under interop the lockbox is
+        // initialized; on the non-interop baseline it is skipped, matching the
+        // skipped proxy in _loadCoreProxies and the address(0) passed to the
+        // portal initialize above.
+        if (_cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
             IOptimismPortal[] memory portals = new IOptimismPortal[](1);
             portals[0] = _cts.optimismPortal;
             _upgrade(
@@ -745,18 +751,24 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             )
         );
 
-        // Initial deployment always deploys ETHLockbox (matches upstream's
-        // `_isInitialDeployment || systemConfig.isFeatureEnabled(...)`
-        // branch with `_isInitialDeployment = true`).
-        IETHLockbox ethLockbox = IETHLockbox(
-            _loadOrDeployProxy(
-                address(optimismPortal),
-                optimismPortal.ethLockbox.selector,
-                proxyDeployArgs,
-                "ETHLockbox",
-                _extraInstructions
-            )
-        );
+        // RSK: ETHLockbox is interop-only machinery. On the permissioned,
+        // non-interop baseline the portal is never wired to it (see
+        // step2_systemConfigAndPortal) and SystemConfig.paused() never reads
+        // it, so skip the proxy instead of deploying it dormant. Under interop
+        // it is provisioned exactly as upstream does. Diverges from upstream's
+        // unconditional `_isInitialDeployment` deploy on purpose.
+        IETHLockbox ethLockbox = IETHLockbox(address(0));
+        if (isDevFeatureEnabled(DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
+            ethLockbox = IETHLockbox(
+                _loadOrDeployProxy(
+                    address(optimismPortal),
+                    optimismPortal.ethLockbox.selector,
+                    proxyDeployArgs,
+                    "ETHLockbox",
+                    _extraInstructions
+                )
+            );
+        }
 
         core = ChainContractsCore({
             proxyAdmin: proxyAdmin,

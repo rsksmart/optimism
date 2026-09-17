@@ -201,10 +201,13 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
     function test_lateCollaboratorFailure_isAtomicAndRetryable() public {
         _startAtStep2();
 
-        bytes memory injectedRevert = abi.encodeWithSignature("Error(string)", "late ethLockbox failure");
-        bytes memory ethLockboxUpgradePrefix =
-            abi.encodeWithSelector(IProxyAdmin.upgradeAndCall.selector, address(chainContracts.ethLockbox));
-        vm.mockCallRevert(address(chainContracts.proxyAdmin), ethLockboxUpgradePrefix, injectedRevert);
+        // RSK: ETHLockbox is skipped on the non-interop baseline, so the last
+        // collaborator upgraded in step2 is the OptimismPortal. Inject the
+        // failure there to exercise the same atomic-and-retryable property.
+        bytes memory injectedRevert = abi.encodeWithSignature("Error(string)", "late portal failure");
+        bytes memory portalUpgradePrefix =
+            abi.encodeWithSelector(IProxyAdmin.upgradeAndCall.selector, address(chainContracts.optimismPortal));
+        vm.mockCallRevert(address(chainContracts.proxyAdmin), portalUpgradePrefix, injectedRevert);
 
         vm.expectRevert(injectedRevert);
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);

@@ -3,7 +3,6 @@ pragma solidity 0.8.15;
 
 import {IProxyAdmin} from "interfaces/universal/IProxyAdmin.sol";
 import {ISystemConfig} from "interfaces/L1/ISystemConfig.sol";
-import {IETHLockbox} from "interfaces/L1/IETHLockbox.sol";
 import {IOptimismPortal2} from "interfaces/L1/IOptimismPortal2.sol";
 import {IL1CrossDomainMessenger} from "interfaces/L1/IL1CrossDomainMessenger.sol";
 import {IL1ERC721Bridge} from "interfaces/L1/IL1ERC721Bridge.sol";
@@ -164,7 +163,8 @@ contract RSKDeployOPChain_Test is RSKOPCTestBase {
         assertEq(systemConfig_.l2ChainId(), L2_CHAIN_ID);
         assertEq(systemConfig_.optimismMintableERC20Factory(), address(output_.optimismMintableERC20FactoryProxy));
         assertEq(address(portal_.systemConfig()), address(systemConfig_));
-        assertEq(address(IETHLockbox(address(output_.ethLockboxProxy)).systemConfig()), address(systemConfig_));
+        // RSK: ETHLockbox is skipped on the non-interop baseline; the portal is not wired to one.
+        assertEq(address(portal_.ethLockbox()), address(0));
         assertEq(address(anchorStateRegistry_.systemConfig()), address(systemConfig_));
         assertEq(address(anchorStateRegistry_.disputeGameFactory()), address(disputeGameFactory_));
         assertEq(disputeGameFactory_.owner(), proxyAdminOwner);
@@ -197,7 +197,8 @@ contract RSKDeployOPChain_Test is RSKOPCTestBase {
         assertGt(address(output_.l1StandardBridgeProxy).code.length, 0);
         assertGt(address(output_.l1CrossDomainMessengerProxy).code.length, 0);
         assertGt(address(output_.optimismPortalProxy).code.length, 0);
-        assertGt(address(output_.ethLockboxProxy).code.length, 0);
+        // RSK: ETHLockbox skipped on the non-interop baseline, so no proxy is deployed.
+        assertEq(address(output_.ethLockboxProxy), address(0));
         assertGt(address(output_.disputeGameFactoryProxy).code.length, 0);
         assertGt(address(output_.anchorStateRegistryProxy).code.length, 0);
         assertGt(address(output_.permissionedDisputeGame).code.length, 0);

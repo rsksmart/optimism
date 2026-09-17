@@ -391,7 +391,11 @@ contract RSKDeployOPChain is Script {
         DeployUtils.assertValidContractAddress(address(_o.l1StandardBridgeProxy));
         DeployUtils.assertValidContractAddress(address(_o.l1CrossDomainMessengerProxy));
         DeployUtils.assertValidContractAddress(address(_o.optimismPortalProxy));
-        DeployUtils.assertValidContractAddress(address(_o.ethLockboxProxy));
+        // RSK: ETHLockbox is skipped on the non-interop baseline (address(0)),
+        // so only assert it when it was actually deployed (interop path).
+        if (address(_o.ethLockboxProxy) != address(0)) {
+            DeployUtils.assertValidContractAddress(address(_o.ethLockboxProxy));
+        }
         DeployUtils.assertValidContractAddress(address(_o.disputeGameFactoryProxy));
         DeployUtils.assertValidContractAddress(address(_o.anchorStateRegistryProxy));
         DeployUtils.assertValidContractAddress(address(_o.delayedWETHPermissionedGameProxy));
