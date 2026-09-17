@@ -393,13 +393,13 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         }
 
         // Lines 816-827 — ETHLockbox (conditional).
-        // RSK: gate on the feature flag alone (dropped upstream's
-        // `_isInitialDeployment ||`). The interop branch above sets
-        // ETH_LOCKBOX before this point, so under interop the lockbox is
-        // initialized; on the non-interop baseline it is skipped, matching the
-        // skipped proxy in _loadCoreProxies and the address(0) passed to the
-        // portal initialize above.
-        if (_cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
+        // RSK: gate on the deployed address, the single source of truth set by
+        // _loadCoreProxies (initial deploy) and the existing-contracts loader
+        // (upgrade). address(0) means the lockbox was skipped on the non-interop
+        // baseline, matching the address(0) passed to the portal initialize
+        // above and the guard in RSKDeployOPChain.checkOutput. This subsumes
+        // upstream's `_isInitialDeployment ||` term.
+        if (address(_cts.ethLockbox) != address(0)) {
             IOptimismPortal[] memory portals = new IOptimismPortal[](1);
             portals[0] = _cts.optimismPortal;
             _upgrade(
