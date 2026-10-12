@@ -126,7 +126,7 @@ Run a package's RSK tests with, e.g.:
 | `op-service/sources/{eth_client,receipts_rpc,types}.go` | pluggable block / header / receipts / tx-hash hooks | `eth_client_rsk_test.go` |
 | `op-deployer/pkg/deployer/broadcaster` | `TxMgrConfigHook` on `KeyedBroadcasterOpts` | `keyed_rsk_test.go` |
 | `op-deployer/pkg/deployer/forge` | `ExtraScriptOpts` on `Client` | `client_rsk_test.go` |
-| `op-proposer/contracts/disputegamefactory.go` | skip un-loadable games; surface ctx errors | `disputegamefactory_rsk_test.go` |
+| `op-proposer/contracts/disputegamefactory.go` | skip games whose factory entry or metadata getters can't be loaded; surface ctx errors | `disputegamefactory_rsk_test.go` |
 | `op-proposer/contracts/disputegamefactory.go` | `GameExists` factory-slot lookup (`games()`) | `disputegamefactory_rsk_test.go` |
 | `op-proposer/proposer/driver.go` | skip proposing when the factory slot is taken | `driver_rsk_test.go` |
 

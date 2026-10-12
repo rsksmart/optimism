@@ -103,7 +103,15 @@ func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer comm
 		if game.GameType == gameType {
 			metadata, err := f.loadGameMetadata(ctx, game.Address)
 			if err != nil {
-				return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to get metadata for dispute game %d: %w", idx, err)
+				// Same rule as gameAtIndex above: surface context errors, skip a
+				// game whose getters can't be read instead of blocking the proposer.
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to get metadata for dispute game %d: %w", idx, err)
+				}
+				if idx == 0 {
+					return false, time.Time{}, common.Hash{}, nil
+				}
+				continue
 			}
 			if metadata.Proposer == proposer {
 				// Found a matching proposal

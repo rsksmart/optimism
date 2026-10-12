@@ -11,20 +11,21 @@ package contracts_test
 //
 // The stock AbiBasedRpc stub can only inject errors into zero-output methods,
 // so we wrap it (rskFailGameAtIndexRPC) to fail the multi-output gameAtIndex
-// call for a chosen index. External test package with rsk-prefixed helpers;
-// method names mirror the Solidity ABI (see AGENTS_rsk.md).
+// call for a chosen index, or every call to one game's address (a game whose
+// metadata getters all revert). External test package with rsk-prefixed
+// helpers; method names mirror the Solidity ABI (see AGENTS_rsk.md).
 
 import (
 	"bytes"
 	"context"
 	"errors"
-	"math"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-proposer/contracts"
@@ -37,7 +38,8 @@ import (
 const (
 	rskMethodGameCount   = "gameCount"
 	rskMethodGameAtIndex = "gameAtIndex"
-	rskMethodClaim       = "claimData"
+	rskMethodGameCreator = "gameCreator"
+	rskMethodRootClaim   = "rootClaim"
 	rskMethodGames       = "games"
 )
 
@@ -58,6 +60,8 @@ type rskFailGameAtIndexRPC struct {
 	selector []byte // gameAtIndex 4-byte method ID
 	failIdx  int64
 	failErr  error
+	// failTo, when set, also fails every eth_call to that address.
+	failTo *common.Address
 }
 
 func (r *rskFailGameAtIndexRPC) targetsFailingCall(method string, args []interface{}) bool {
@@ -67,6 +71,9 @@ func (r *rskFailGameAtIndexRPC) targetsFailingCall(method string, args []interfa
 	opts, ok := args[0].(map[string]any)
 	if !ok {
 		return false
+	}
+	if to, ok := opts["to"].(*common.Address); ok && r.failTo != nil && to != nil && *to == *r.failTo {
+		return true
 	}
 	input, ok := opts["input"].(hexutil.Bytes)
 	if !ok || len(input) < 4+32 {
@@ -86,42 +93,62 @@ func (r *rskFailGameAtIndexRPC) CallContext(ctx context.Context, out interface{}
 	return r.AbiBasedRpc.CallContext(ctx, out, method, args...)
 }
 
+// BatchCallContext routes each element through CallContext, so the failure
+// injection also covers multi-call batches such as a game's metadata getters.
+func (r *rskFailGameAtIndexRPC) BatchCallContext(ctx context.Context, b []rpc.BatchElem) error {
+	var errs []error
+	for i := range b {
+		b[i].Error = r.CallContext(ctx, b[i].Result, b[i].Method, b[i].Args...)
+		errs = append(errs, b[i].Error)
+	}
+	return errors.Join(errs...)
+}
+
 // rskSetupFactory builds a DisputeGameFactory whose gameAtIndex(failIdx) fails
 // with failErr. Returns the underlying stub so callers can stub the rest.
 func rskSetupFactory(t *testing.T, failIdx int64, failErr error) (*batchingTest.AbiBasedRpc, *contracts.DisputeGameFactory) {
+	stubRpc, _, factory := rskSetupFactoryWithWrapper(t, failIdx, failErr)
+	return stubRpc, factory
+}
+
+// rskSetupFactoryWithWrapper is rskSetupFactory that also returns the failure
+// wrapper, so a test can set failTo.
+func rskSetupFactoryWithWrapper(t *testing.T, failIdx int64, failErr error) (*batchingTest.AbiBasedRpc, *rskFailGameAtIndexRPC, *contracts.DisputeGameFactory) {
 	fdgAbi := snapshots.LoadDisputeGameFactoryABI()
 	stubRpc := batchingTest.NewAbiBasedRpc(t, rskFactoryAddr, fdgAbi)
-	rpc := &rskFailGameAtIndexRPC{
+	wrapper := &rskFailGameAtIndexRPC{
 		AbiBasedRpc: stubRpc,
 		selector:    fdgAbi.Methods[rskMethodGameAtIndex].ID,
 		failIdx:     failIdx,
 		failErr:     failErr,
 	}
-	caller := batching.NewMultiCaller(rpc, batching.DefaultBatchSize)
+	caller := batching.NewMultiCaller(wrapper, batching.DefaultBatchSize)
 	factory := contracts.NewDisputeGameFactory(rskFactoryAddr, caller, time.Minute)
-	return stubRpc, factory
+	return stubRpc, wrapper, factory
 }
 
-// rskStubValidGame stubs gameAtIndex(idx) and the game's claimData so the game
-// loads as a proposal by rskProposerAddr at ts.
-func rskStubValidGame(stubRpc *batchingTest.AbiBasedRpc, idx int64, gameType uint32, ts time.Time) common.Hash {
-	gameAddr := common.Address{byte(0x10 + idx)}
-	claimHash := common.Hash{0xdd}
+// rskGameAddr is the address rskStubValidGame / rskStubGameAtIndex use for idx.
+func rskGameAddr(idx int64) common.Address {
+	return common.Address{byte(0x10 + idx)}
+}
+
+// rskStubGameAtIndex stubs only the factory's gameAtIndex(idx) entry.
+func rskStubGameAtIndex(stubRpc *batchingTest.AbiBasedRpc, idx int64, gameType uint32, ts time.Time) common.Address {
+	gameAddr := rskGameAddr(idx)
 	stubRpc.SetResponse(rskFactoryAddr, rskMethodGameAtIndex, rpcblock.Latest,
 		[]interface{}{big.NewInt(idx)},
 		[]interface{}{gameType, uint64(ts.Unix()), gameAddr})
 	stubRpc.AddContract(gameAddr, snapshots.LoadFaultDisputeGameABI())
-	stubRpc.SetResponse(gameAddr, rskMethodClaim, rpcblock.Latest,
-		[]interface{}{big.NewInt(0)},
-		[]interface{}{
-			uint32(math.MaxUint32), // parent (none => root)
-			common.Address{},       // countered by
-			rskProposerAddr,        // claimant == proposer
-			big.NewInt(1000),       // bond
-			claimHash,              // claim
-			big.NewInt(1),          // position
-			big.NewInt(100),        // clock
-		})
+	return gameAddr
+}
+
+// rskStubValidGame stubs gameAtIndex(idx) and the game's gameCreator() and
+// rootClaim() getters so the game loads as a proposal by rskProposerAddr at ts.
+func rskStubValidGame(stubRpc *batchingTest.AbiBasedRpc, idx int64, gameType uint32, ts time.Time) common.Hash {
+	gameAddr := rskStubGameAtIndex(stubRpc, idx, gameType, ts)
+	claimHash := common.Hash{0xdd}
+	stubRpc.SetResponse(gameAddr, rskMethodGameCreator, rpcblock.Latest, nil, []interface{}{rskProposerAddr})
+	stubRpc.SetResponse(gameAddr, rskMethodRootClaim, rpcblock.Latest, nil, []interface{}{claimHash})
 	return claimHash
 }
 
@@ -139,6 +166,28 @@ func TestRSK_HasProposedSince_SkipsIncompatibleGame(t *testing.T) {
 
 	proposed, ts, claim, err := factory.HasProposedSince(context.Background(), rskProposerAddr, cutoff, 0)
 	require.NoError(t, err, "an unloadable game must be skipped, not fatal")
+	require.True(t, proposed)
+	require.Equal(t, cutoff.Add(10*time.Second), ts)
+	require.Equal(t, wantClaim, claim)
+}
+
+// TestRSK_HasProposedSince_SkipsGameWithUnreadableMetadata: the newest game
+// loads from the factory with the wanted type, but every getter on the game
+// itself fails (gameCreator/rootClaim and the legacy claimData(0) fallback).
+// The scan must skip it and still find the older proposal; upstream returns an
+// error here and blocks the proposer.
+func TestRSK_HasProposedSince_SkipsGameWithUnreadableMetadata(t *testing.T) {
+	cutoff := time.Unix(1000, 0)
+	stubRpc, wrapper, factory := rskSetupFactoryWithWrapper(t, -1, errors.New("execution reverted"))
+
+	stubRpc.SetResponse(rskFactoryAddr, rskMethodGameCount, rpcblock.Latest, nil,
+		[]interface{}{big.NewInt(2)})
+	badGame := rskStubGameAtIndex(stubRpc, 1, 0, cutoff.Add(20*time.Second))
+	wrapper.failTo = &badGame
+	wantClaim := rskStubValidGame(stubRpc, 0, 0, cutoff.Add(10*time.Second))
+
+	proposed, ts, claim, err := factory.HasProposedSince(context.Background(), rskProposerAddr, cutoff, 0)
+	require.NoError(t, err, "a game with unreadable metadata must be skipped, not fatal")
 	require.True(t, proposed)
 	require.Equal(t, cutoff.Add(10*time.Second), ts)
 	require.Equal(t, wantClaim, claim)
