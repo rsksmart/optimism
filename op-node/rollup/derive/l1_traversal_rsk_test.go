@@ -3,8 +3,8 @@ package derive_test
 // RSK fork coverage for the FetchReceipts-not-found handling that the fork adds
 // to L1 traversal.
 //
-// Upstream's L1Traversal.AdvanceL1Block and L1TraversalManaged.ProvideNextL1
-// only classify a failed sysCfg receipt fetch as a temporary error. The RSK
+// Upstream's L1Traversal.AdvanceL1Block only classifies a failed sysCfg
+// receipt fetch as a temporary error. The RSK
 // fork adds a reorg-aware branch: when FetchReceipts reports the block is no
 // longer found, the block may have been reorged out between the ref lookup and
 // the receipt fetch (more likely on RSK's faster/re-orgier L1). The fork then
@@ -20,12 +20,12 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
@@ -113,48 +113,6 @@ func TestRSK_L1Traversal_FetchReceiptsNotFoundRefetchError(t *testing.T) {
 	_ = tr.Reset(context.Background(), origin, sysCfg)
 
 	err := tr.AdvanceL1Block(context.Background())
-	require.ErrorIs(t, err, derive.ErrTemporary)
-	require.NotErrorIs(t, err, derive.ErrReset)
-	src.AssertExpectations(t)
-}
-
-// TestRSK_L1TraversalManaged_FetchReceiptsNotFound covers the managed traversal
-// (Interop) fork branch: FetchReceipts returning NotFound is treated directly
-// as a reorg, so ProvideNextL1 returns a reset error.
-func TestRSK_L1TraversalManaged_FetchReceiptsNotFound(t *testing.T) {
-	rng := rand.New(rand.NewSource(1234))
-	sysCfg := eth.SystemConfig{BatcherAddr: testutils.RandomAddress(rng)}
-
-	origin := testutils.RandomBlockRef(rng)
-	next := testutils.NextRandomRef(rng, origin)
-
-	src := &testutils.MockL1Source{}
-	src.ExpectFetchReceipts(next.Hash, nil, nil, ethereum.NotFound)
-
-	tr := derive.NewL1TraversalManaged(testlog.Logger(t, log.LevelError), rskTraversalConfig(rng, sysCfg), src)
-	_ = tr.Reset(context.Background(), origin, sysCfg) // sets internal block=origin, done=true
-
-	err := tr.ProvideNextL1(context.Background(), next)
-	require.ErrorIs(t, err, derive.ErrReset)
-	src.AssertExpectations(t)
-}
-
-// TestRSK_L1TraversalManaged_FetchReceiptsTemporary verifies that a non-NotFound
-// receipt-fetch failure in the managed traversal remains a temporary error.
-func TestRSK_L1TraversalManaged_FetchReceiptsTemporary(t *testing.T) {
-	rng := rand.New(rand.NewSource(1234))
-	sysCfg := eth.SystemConfig{BatcherAddr: testutils.RandomAddress(rng)}
-
-	origin := testutils.RandomBlockRef(rng)
-	next := testutils.NextRandomRef(rng, origin)
-
-	src := &testutils.MockL1Source{}
-	src.ExpectFetchReceipts(next.Hash, nil, nil, errors.New("rsk: interrupted connection"))
-
-	tr := derive.NewL1TraversalManaged(testlog.Logger(t, log.LevelError), rskTraversalConfig(rng, sysCfg), src)
-	_ = tr.Reset(context.Background(), origin, sysCfg)
-
-	err := tr.ProvideNextL1(context.Background(), next)
 	require.ErrorIs(t, err, derive.ErrTemporary)
 	require.NotErrorIs(t, err, derive.ErrReset)
 	src.AssertExpectations(t)

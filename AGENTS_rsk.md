@@ -121,7 +121,7 @@ Run a package's RSK tests with, e.g.:
 | `op-service/txmgr/estimator.go` | pre-EIP-1559 `eth_gasPrice` fallback; "neither available" error | `estimator_rsk_test.go` |
 | `op-service/txmgr/{cli,txmgr}.go` | `UseLegacyTx` (type-0 tx), pluggable `GasPriceEstimatorFn` | `txmgr_rsk_test.go` |
 | `op-service/txmgr/metrics/tx_metrics.go` | nil-guarded fee gauges (nil base/blob fee) | `tx_metrics_rsk_test.go` |
-| `op-node/rollup/derive/l1_traversal{,_managed}.go` | reorg-aware receipt-fetch `NotFound` handling | `l1_traversal_rsk_test.go` |
+| `op-node/rollup/derive/l1_traversal.go` | reorg-aware receipt-fetch `NotFound` handling | `l1_traversal_rsk_test.go` |
 | `op-node/rollup/derive/l1_block_info.go` | nil L1 `BaseFee` ⇒ 0 (no panic) | `l1_block_info_rsk_test.go` |
 | `op-service/sources/{eth_client,receipts_rpc,types}.go` | pluggable block / header / receipts / tx-hash hooks | `eth_client_rsk_test.go` |
 | `op-deployer/pkg/deployer/broadcaster` | `TxMgrConfigHook` on `KeyedBroadcasterOpts` | `keyed_rsk_test.go` |

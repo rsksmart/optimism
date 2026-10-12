@@ -173,7 +173,7 @@ func TestRSK_EthClient_TxHashesFromBlockHook(t *testing.T) {
 		ethcl, block, captured := buildClient(nil)
 		_, _, err := ethcl.FetchReceipts(ctx, block.Hash)
 		require.NoError(t, err)
-		require.Equal(t, eth.TransactionsToHashes(block.Transactions), *captured,
+		require.Equal(t, block.Transactions.Hashes(), *captured,
 			"nil hook must feed locally-derived tx hashes to the receipts fetch")
 	})
 
