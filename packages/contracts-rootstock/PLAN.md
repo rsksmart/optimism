@@ -1,5 +1,25 @@
 # oprsk-contracts — F1 design plan
 
+## Status update (2026-10-12, upstream op-node/v1.19.9 / op-contracts v9)
+
+The splitter now mirrors OPCMv2 at op-node/v1.19.9. What changed against the
+design below:
+
+- Stages are 1a, 1b, 2, 3, 4a, 4b and 5 (stage 1 and 4 were split for gas).
+  `forge test` (Ethereum gas schedule) measures every stage under 3.5 M raw;
+  the largest is 1b.
+- The splitter is 19,978 bytes deployed (4,598 bytes EIP-170 margin):
+  upstream moved the SystemConfig initializer encoding into
+  `OPContractsManagerUtilsCaller._encodeSystemConfigInit`, and the interop
+  branches left `_apply`.
+- The ETHLockbox is mandatory: step 2 enables the feature, initializes the
+  portal and the lockbox with it, and migrates the portal's liquidity.
+  DelayedWETH and the AnchorStateRegistry are initialized with the lockbox.
+- `_assertValidFullConfig` follows upstream's v9 rules with two RSK
+  divergences, both for PERMISSIONED_CANNON: it stays deployable although
+  v9 hard-wires SUPER_ROOT_GAMES_MIGRATION on, and it may carry a zero init
+  bond (PAYROLLUP-191).
+
 ## Status (2026-05-04)
 
 **Implemented.** Pending live regtest smoke test.

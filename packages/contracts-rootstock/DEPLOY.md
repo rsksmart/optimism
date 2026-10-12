@@ -82,7 +82,7 @@ extract the addresses you need to feed into the next step.
 
 | # | Script | Package | Tx count | Output |
 |---|---|---|---|---|
-| 1 | `DeploySuperchain.run` | contracts-bedrock | ~5 | SuperchainConfig, ProtocolVersions, SuperchainProxyAdmin |
+| 1 | `DeploySuperchain.run` | contracts-bedrock | ~3 | SuperchainConfig, SuperchainProxyAdmin |
 | 2 | `DeployImplementations.runWithBytes` | contracts-bedrock | ~16 | All impls + `OPCMv2` |
 | 3 | `RSKDeployOPChain.runSplit` | contracts-rootstock (this) | **8** | All proxies + dispute games |
 | 4 | `L2GenesisDump.runWithDump` (you write a wrapper) | contracts-bedrock | 0 (off-chain) | `l2-allocs.json` |
@@ -170,17 +170,12 @@ Skip this section on testnet/mainnet — it's already there.
 ```solidity
 struct Input {
     address guardian;
-    address protocolVersionsOwner;
     address superchainProxyAdminOwner;
     bool    paused;
-    bytes32 recommendedProtocolVersion;
-    bytes32 requiredProtocolVersion;
 }
 ```
 
-For a single-operator regtest, set all three role addresses to your EOA.
-Both protocol-version fields can be the version-9.0.0 sentinel
-`0x0000…0009000000000000000000000000`.
+For a single-operator regtest, set both role addresses to your EOA.
 
 Run from `optimism/packages/contracts-bedrock`:
 
@@ -188,20 +183,20 @@ Run from `optimism/packages/contracts-bedrock`:
 cd optimism/packages/contracts-bedrock
 
 forge script scripts/deploy/DeploySuperchain.s.sol:DeploySuperchain \
-  --sig 'run((address,address,address,bool,bytes32,bytes32))' \
-  "($DEPLOYER,$DEPLOYER,$DEPLOYER,false,0x0000000000000000000000000000000000000009000000000000000000000000,0x0000000000000000000000000000000000000009000000000000000000000000)" \
+  --sig 'run((address,address,bool))' \
+  "($DEPLOYER,$DEPLOYER,false)" \
   --rpc-url $L1_RPC --private-key $DEPLOYER_KEY \
   --broadcast --legacy --slow --gas-estimate-multiplier 110 \
   -vvvv
 ```
 
-Extract the 5 addresses from the broadcast log:
+Extract the addresses from the broadcast log:
 
 ```bash
 BROADCAST=broadcast/DeploySuperchain.s.sol/$L1_CHAIN_ID/run-latest.json
 export SUPERCHAIN_CONFIG_PROXY=$(jq -r '.returns.output_.value | fromjson | .superchainConfigProxy' $BROADCAST 2>/dev/null \
   || jq -r '.transactions[] | select(.contractName == "Proxy" and .arguments[0] == env.SUPERCHAIN_CONFIG_IMPL) | .contractAddress' $BROADCAST)
-# (also extract: protocolVersionsProxy, superchainProxyAdmin, superchainConfigImpl, protocolVersionsImpl)
+# (also extract: superchainProxyAdmin, superchainConfigImpl)
 ```
 
 In practice the cleanest way to read these out of the broadcast JSON is
@@ -213,8 +208,7 @@ jq -r '.transactions[] | "\(.contractName // "?")\t\(.contractAddress)"' \
   broadcast/DeploySuperchain.s.sol/$L1_CHAIN_ID/run-latest.json
 ```
 
-You'll need `superchainConfigProxy`, `protocolVersionsProxy`, and
-`superchainProxyAdmin` for step 2.
+You'll need `superchainConfigProxy` and `superchainProxyAdmin` for step 2.
 
 ---
 
@@ -237,14 +231,11 @@ struct Input {
     uint256 faultGameV2ClockExtension;
     uint256 faultGameV2MaxClockDuration;
     address superchainConfigProxy;
-    address protocolVersionsProxy;
     address superchainProxyAdmin;
     address l1ProxyAdminOwner;
     address challenger;
-    bool    skipFaultProofs;     // set TRUE on RSK to skip OptimismPortalInterop,
-                                 // FaultDisputeGame, PermissionedDisputeGame, and
-                                 // OPCMStandardValidator (each ~6 M gas to deploy
-                                 // and not used by the permissioned-only path)
+    address sp1Verifier;         // must be zero unless ZK_DISPUTE_GAME is in
+                                 // devFeatureBitmap
 }
 ```
 
@@ -252,8 +243,8 @@ ABI-encode the input with `cast`:
 
 ```bash
 INPUT_BYTES=$(cast abi-encode \
-  'f((uint256,uint256,uint256,uint256,uint256,uint256,bytes32,uint256,uint256,uint256,uint256,address,address,address,address,address,bool))' \
-  "(604800,126000,86400,604800,302400,8,0x0,73,30,10800,302400,$SUPERCHAIN_CONFIG_PROXY,$PROTOCOL_VERSIONS_PROXY,$SUPERCHAIN_PROXY_ADMIN,$DEPLOYER,$DEPLOYER,true)")
+  'f((uint256,uint256,uint256,uint256,uint256,uint256,bytes32,uint256,uint256,uint256,uint256,address,address,address,address,address))' \
+  "(604800,126000,86400,604800,302400,8,0x0000000000000000000000000000000000000000000000000000000000000000,73,30,10800,302400,$SUPERCHAIN_CONFIG_PROXY,$SUPERCHAIN_PROXY_ADMIN,$DEPLOYER,$DEPLOYER,0x0000000000000000000000000000000000000000)")
 
 forge script scripts/deploy/DeployImplementations.s.sol:DeployImplementations \
   --sig 'runWithBytes(bytes)' "$INPUT_BYTES" \
@@ -298,8 +289,10 @@ struct DeployOPChainInput {
     address opcm;
     string  saltMixer;
     uint64  gasLimit;
-    GameType  disputeGameType;             // uint32; 1 = permissioned
+    GameType  disputeGameType;             // uint32; must be 1 (PERMISSIONED_CANNON)
     Claim     disputeAbsolutePrestate;     // bytes32
+    Proposal  startingAnchorRoot;          // (bytes32 root, uint256 l2SequenceNumber); root != 0
+    Claim     cannonAbsolutePrestate;      // bytes32; unused on RSK, pass 0
     uint256 disputeMaxGameDepth;
     uint256 disputeSplitDepth;
     Duration disputeClockExtension;        // uint64 seconds
@@ -324,8 +317,8 @@ Run from `optimism/packages/contracts-rootstock`:
 cd optimism/packages/contracts-rootstock
 
 forge script script/RSKDeployOPChain.s.sol:RSKDeployOPChain \
-  --sig 'runSplit((address,address,address,address,address,address,uint32,uint32,uint256,address,string,uint64,uint32,bytes32,uint256,uint256,uint64,uint64,bool,uint32,uint64,address,bool))' \
-  "($DEPLOYER,$DEPLOYER,$BATCHER,$DEPLOYER,$PROPOSER,$DEPLOYER,1000000,1000000,$L2_CHAIN_ID,$OPCM,\"$L2_CHAIN_ID\",30000000,1,0x0000000000000000000000000000000000000000000000000000000000000001,73,30,10800,302400,false,0,0,$SUPERCHAIN_CONFIG_PROXY,false)" \
+  --sig 'runSplit((address,address,address,address,address,address,uint32,uint32,uint256,address,string,uint64,uint32,bytes32,(bytes32,uint256),bytes32,uint256,uint256,uint64,uint64,bool,uint32,uint64,address,bool))' \
+  "($DEPLOYER,$DEPLOYER,$BATCHER,$DEPLOYER,$PROPOSER,$DEPLOYER,1000000,1000000,$L2_CHAIN_ID,$OPCM,\"$L2_CHAIN_ID\",30000000,1,0x0000000000000000000000000000000000000000000000000000000000000001,(0xdead000000000000000000000000000000000000000000000000000000000000,0),0x0000000000000000000000000000000000000000000000000000000000000000,73,30,10800,302400,false,0,0,$SUPERCHAIN_CONFIG_PROXY,false)" \
   --rpc-url $L1_RPC --private-key $DEPLOYER_KEY \
   --broadcast --legacy --slow --gas-estimate-multiplier 110 \
   -vvvv
@@ -344,7 +337,11 @@ This emits **8 broadcasts** from this Forge invocation:
 | 7 | `step4b_anchorAndGames` | 0.7 M |
 | 8 | `step5_finalize` | 0.1 M |
 
-All comfortably under the 6.8 M RSKIP144 sublist cap.
+All comfortably under the 6.8 M RSKIP144 sublist cap. These figures were
+measured before the op-node/v1.19.9 sync. Since then step 2 also enables the
+ETH_LOCKBOX feature and migrates the portal's liquidity, and step 4b clears
+SUPER_CANNON; `forge test` on the Ethereum gas schedule puts the largest stage
+(1b) at ~3.7 M padded.
 
 The broadcast file will be at
 `broadcast/RSKDeployOPChain.s.sol/$L1_CHAIN_ID/runSplit-latest.json`.

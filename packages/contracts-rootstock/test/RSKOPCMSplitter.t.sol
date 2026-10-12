@@ -6,6 +6,7 @@ import {IDisputeGame} from "interfaces/dispute/IDisputeGame.sol";
 import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
 import {IFaultDisputeGame} from "interfaces/dispute/IFaultDisputeGame.sol";
 import {Features} from "src/libraries/Features.sol";
+import {DevFeatures} from "src/libraries/DevFeatures.sol";
 import {Claim, GameStatus, GameTypes} from "src/dispute/lib/Types.sol";
 
 import {RSKOPCMSplitter} from "../contracts/RSKOPCMSplitter.sol";
@@ -23,6 +24,24 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         assertEq(splitter.devFeatureBitmap(), bytes32(0));
         assertFalse(splitter.isDevFeatureEnabled(bytes32(uint256(1))));
         assertEq(address(splitter.implementations().systemConfigImpl), address(implementationsOutput.systemConfigImpl));
+    }
+
+    /// @notice op-contracts v9 hard-wires SUPER_ROOT_GAMES_MIGRATION on, which
+    ///         upstream's OPCM reads as "initial deployments use super-root
+    ///         games only". The splitter keeps PERMISSIONED_CANNON deployable
+    ///         as the respected game (RSK divergence, see its header).
+    function test_permissionedCannon_superRootHardwired_succeeds() public {
+        assertEq(splitter.devFeatureBitmap(), bytes32(0));
+        assertTrue(splitter.isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION));
+
+        RSKOPCMSplitter.ChainContracts memory cts = _runSplitter();
+
+        IDisputeGameFactory dgf = IDisputeGameFactory(address(cts.disputeGameFactory));
+        assertEq(
+            address(dgf.gameImpls(GameTypes.PERMISSIONED_CANNON)), address(implementationsOutput.permissionedDisputeGameImpl)
+        );
+        assertEq(address(dgf.gameImpls(GameTypes.SUPER_PERMISSIONED)), address(0));
+        assertEq(cts.optimismPortal.respectedGameType().raw(), GameTypes.PERMISSIONED_CANNON.raw());
     }
 
     function test_onlyDeployer_guardsEveryStage() public {
@@ -69,7 +88,10 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
 
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
         assertEq(splitter.phase(), 3);
-        assertFalse(chainContracts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
+        // op-contracts v9: the ETHLockbox is mandatory, so step 2 turns the
+        // feature on and points the portal at it.
+        assertTrue(chainContracts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
+        assertEq(address(chainContracts.optimismPortal.ethLockbox()), address(chainContracts.ethLockbox));
 
         splitter.step3_messengerAndBridges(fullConfig, chainContracts);
         assertEq(splitter.phase(), 4);

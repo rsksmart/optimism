@@ -14,6 +14,7 @@ import {Claim, Duration, GameType, GameTypes} from "src/dispute/lib/Types.sol";
 
 import {IOPContractsManagerUtils} from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import {ISuperchainConfig} from "interfaces/L1/ISuperchainConfig.sol";
+import {ISP1Verifier} from "interfaces/vendor/ISP1Verifier.sol";
 
 import {RSKOPCMSplitter} from "../../contracts/RSKOPCMSplitter.sol";
 
@@ -28,7 +29,6 @@ import {ResolvedDelegateProxy} from "src/legacy/ResolvedDelegateProxy.sol";
 import {Proxy} from "src/universal/Proxy.sol";
 import {ProxyAdmin} from "src/universal/ProxyAdmin.sol";
 import {SuperchainConfig} from "src/L1/SuperchainConfig.sol";
-import {ProtocolVersions} from "src/L1/ProtocolVersions.sol";
 import {SystemConfig} from "src/L1/SystemConfig.sol";
 import {L1CrossDomainMessenger} from "src/L1/L1CrossDomainMessenger.sol";
 import {L1ERC721Bridge} from "src/L1/L1ERC721Bridge.sol";
@@ -96,11 +96,8 @@ abstract contract RSKOPCTestBase is Test {
         DeploySuperchain.Output memory superchain = deploySuperchain.run(
             DeploySuperchain.Input({
                 guardian: makeAddr("guardian"),
-                protocolVersionsOwner: makeAddr("protocolVersionsOwner"),
                 superchainProxyAdminOwner: makeAddr("superchainProxyAdminOwner"),
-                paused: false,
-                recommendedProtocolVersion: bytes32(uint256(2)),
-                requiredProtocolVersion: bytes32(uint256(1))
+                paused: false
             })
         );
         superchainConfig = superchain.superchainConfigProxy;
@@ -119,10 +116,11 @@ abstract contract RSKOPCTestBase is Test {
                 faultGameV2ClockExtension: 10800,
                 faultGameV2MaxClockDuration: 302400,
                 superchainConfigProxy: superchain.superchainConfigProxy,
-                protocolVersionsProxy: superchain.protocolVersionsProxy,
                 superchainProxyAdmin: superchain.superchainProxyAdmin,
                 l1ProxyAdminOwner: makeAddr("superchainProxyAdminOwner"),
-                challenger: challenger
+                challenger: challenger,
+                // Must be zero while ZK_DISPUTE_GAME is disabled (devFeatureBitmap 0).
+                sp1Verifier: ISP1Verifier(address(0))
             })
         );
 
@@ -168,9 +166,9 @@ abstract contract RSKOPCTestBase is Test {
             )
         );
         _pushGameConfig(false, 0, GameTypes.CANNON_KONA, bytes(""));
-        _pushGameConfig(false, 0, GameTypes.SUPER_CANNON, bytes(""));
-        _pushGameConfig(false, 0, GameTypes.SUPER_PERMISSIONED_CANNON, bytes(""));
+        _pushGameConfig(false, 0, GameTypes.SUPER_PERMISSIONED, bytes(""));
         _pushGameConfig(false, 0, GameTypes.SUPER_CANNON_KONA, bytes(""));
+        _pushGameConfig(false, 0, GameTypes.ZK_DISPUTE_GAME, bytes(""));
     }
 
     function _pushGameConfig(bool enabled_, uint256 bond_, GameType gameType_, bytes memory args_) internal {
@@ -198,6 +196,8 @@ abstract contract RSKOPCTestBase is Test {
             gasLimit: GAS_LIMIT,
             disputeGameType: GameTypes.PERMISSIONED_CANNON,
             disputeAbsolutePrestate: absolutePrestate,
+            startingAnchorRoot: ScriptConstants.DEFAULT_OUTPUT_ROOT(),
+            cannonAbsolutePrestate: Claim.wrap(bytes32(0)),
             disputeMaxGameDepth: DISPUTE_MAX_GAME_DEPTH,
             disputeSplitDepth: DISPUTE_SPLIT_DEPTH,
             disputeClockExtension: clockExtension,

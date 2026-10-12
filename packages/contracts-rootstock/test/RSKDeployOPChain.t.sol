@@ -12,6 +12,7 @@ import {IAnchorStateRegistry} from "interfaces/dispute/IAnchorStateRegistry.sol"
 import {IDelayedWETH} from "interfaces/dispute/IDelayedWETH.sol";
 import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
 import {Claim, Duration, GameTypes} from "src/dispute/lib/Types.sol";
+import {Features} from "src/libraries/Features.sol";
 
 import {RSKDeployOPChain} from "../script/RSKDeployOPChain.s.sol";
 import {RSKOPCTestBase} from "./helpers/RSKOPCTestBase.sol";
@@ -164,8 +165,14 @@ contract RSKDeployOPChain_Test is RSKOPCTestBase {
         assertEq(systemConfig_.l2ChainId(), L2_CHAIN_ID);
         assertEq(systemConfig_.optimismMintableERC20Factory(), address(output_.optimismMintableERC20FactoryProxy));
         assertEq(address(portal_.systemConfig()), address(systemConfig_));
-        assertEq(address(IETHLockbox(address(output_.ethLockboxProxy)).systemConfig()), address(systemConfig_));
-        assertEq(address(anchorStateRegistry_.systemConfig()), address(systemConfig_));
+        // op-contracts v9: the ETHLockbox is mandatory, and DelayedWETH and the
+        // AnchorStateRegistry read the pause state through it.
+        IETHLockbox lockbox_ = IETHLockbox(address(output_.ethLockboxProxy));
+        assertTrue(systemConfig_.isFeatureEnabled(Features.ETH_LOCKBOX));
+        assertEq(address(portal_.ethLockbox()), address(lockbox_));
+        assertTrue(lockbox_.authorizedPortals(portal_));
+        assertEq(address(lockbox_.superchainConfig()), address(superchainConfig));
+        assertEq(address(anchorStateRegistry_.ethLockbox()), address(lockbox_));
         assertEq(address(anchorStateRegistry_.disputeGameFactory()), address(disputeGameFactory_));
         assertEq(disputeGameFactory_.owner(), proxyAdminOwner);
         assertEq(
@@ -173,9 +180,10 @@ contract RSKDeployOPChain_Test is RSKOPCTestBase {
             address(output_.permissionedDisputeGame)
         );
         assertEq(
-            address(IDelayedWETH(payable(address(output_.delayedWETHPermissionedGameProxy))).systemConfig()),
-            address(systemConfig_)
+            address(IDelayedWETH(payable(address(output_.delayedWETHPermissionedGameProxy))).ethLockbox()),
+            address(lockbox_)
         );
+        assertEq(address(disputeGameFactory_.gameImpls(GameTypes.SUPER_CANNON)), address(0));
         assertEq(address(messenger_.systemConfig()), address(systemConfig_));
         assertEq(address(messenger_.portal()), address(portal_));
         assertEq(
