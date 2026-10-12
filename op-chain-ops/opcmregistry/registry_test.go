@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
@@ -368,6 +368,28 @@ func TestFilterOPCMsByReleaseVersion(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid lastVersion")
 	})
+}
+
+func TestOPCMsFromVersionsSkipsPrereleaseReleaseTags(t *testing.T) {
+	versions := Versions{
+		"op-contracts/v7.0.0-rc.2": {
+			OPContractsManager: &ContractData{
+				Version: "7.1.17",
+				Address: addrPtr("0x9999999999999999999999999999999999999999"),
+			},
+		},
+		"op-contracts/v6.0.0": {
+			OPContractsManager: &ContractData{
+				Version: "6.0.0",
+				Address: addrPtr("0x6666666666666666666666666666666666666666"),
+			},
+		},
+	}
+
+	opcms := opcmsFromVersions(MainnetChainID, versions)
+	require.Len(t, opcms, 1)
+	require.Equal(t, common.HexToAddress("0x6666666666666666666666666666666666666666"), opcms[0].Address)
+	require.Equal(t, "6.0.0", opcms[0].ReleaseVersion)
 }
 
 func TestFilterByLastUsedOPCMVersion(t *testing.T) {

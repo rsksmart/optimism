@@ -48,6 +48,24 @@
   {
     "inputs": [
       {
+        "internalType": "bytes32",
+        "name": "_withdrawalHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "address",
+        "name": "_proofSubmitter",
+        "type": "address"
+      }
+    ],
+    "name": "deleteProvenWithdrawal",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "_to",
         "type": "address"
@@ -782,6 +800,25 @@
       {
         "indexed": true,
         "internalType": "address",
+        "name": "proofSubmitter",
+        "type": "address"
+      }
+    ],
+    "name": "WithdrawalProofDeleted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "withdrawalHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
         "name": "from",
         "type": "address"
       },
@@ -856,6 +893,11 @@
   },
   {
     "inputs": [],
+    "name": "OptimismPortal_DisputeGameNotInvalidated",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OptimismPortal_GasEstimation",
     "type": "error"
   },
@@ -906,6 +948,11 @@
   },
   {
     "inputs": [],
+    "name": "OptimismPortal_LockboxNotAuthorizedForPortal",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OptimismPortal_MigratingToSameRegistry",
     "type": "error"
   },
@@ -926,12 +973,22 @@
   },
   {
     "inputs": [],
+    "name": "OptimismPortal_NotUsingLockbox",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OptimismPortal_ProofNotOldEnough",
     "type": "error"
   },
   {
     "inputs": [],
     "name": "OptimismPortal_Unproven",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OptimismPortal_ZeroAddress",
     "type": "error"
   },
   {

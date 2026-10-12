@@ -10,6 +10,9 @@ import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
 import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
+import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 
 /// @title OPContractsManagerUtilsCaller
 /// @notice OPContractsManagerUtilsCaller is an abstract contract that exists to hide all of the
@@ -20,6 +23,21 @@ import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 ///      identical to an "external library" contract. You could use a real external library, but
 ///      this is much easier for humans to read and for us to validate offchain.
 abstract contract OPContractsManagerUtilsCaller {
+    /// @notice Arguments for SystemConfig.initialize, mirroring that function's signature so the
+    ///         encoding lives in one place.
+    struct SystemConfigInitArgs {
+        address owner;
+        uint32 basefeeScalar;
+        uint32 blobbasefeeScalar;
+        bytes32 batcherHash;
+        uint64 gasLimit;
+        address unsafeBlockSigner;
+        IResourceMetering.ResourceConfig resourceConfig;
+        ISystemConfig.Addresses addrs;
+        uint256 l2ChainId;
+        ISuperchainConfig superchainConfig;
+    }
+
     /// @notice Address of the OPContractsManagerUtils contract.
     IOPContractsManagerUtils public immutable opcmUtils;
 
@@ -28,16 +46,24 @@ abstract contract OPContractsManagerUtilsCaller {
         opcmUtils = _utils;
     }
 
-    /// @notice Maps an L2 chain ID to an L1 batch inbox address as defined by the standard
-    ///         configuration's convention. This convention is
-    ///         `versionByte || keccak256(bytes32(chainId))[:19]`, where || denotes concatenation,
-    ///         versionByte is 0x00, and chainId is a uint256.
-    ///         https://specs.optimism.io/protocol/configurability.html#consensus-parameters
-    /// @param _l2ChainId The L2 chain ID to map to an L1 batch inbox address.
-    /// @return Chain ID mapped to an L1 batch inbox address.
-    function _chainIdToBatchInboxAddress(uint256 _l2ChainId) internal view returns (address) {
-        return abi.decode(
-            _staticcall(abi.encodeCall(IOPContractsManagerUtils.chainIdToBatchInboxAddress, (_l2ChainId))), (address)
+    /// @notice Builds SystemConfig.initialize calldata.
+    /// @param _args The initializer arguments.
+    /// @return Calldata for SystemConfig.initialize.
+    function _encodeSystemConfigInit(SystemConfigInitArgs memory _args) internal pure returns (bytes memory) {
+        return abi.encodeCall(
+            ISystemConfig.initialize,
+            (
+                _args.owner,
+                _args.basefeeScalar,
+                _args.blobbasefeeScalar,
+                _args.batcherHash,
+                _args.gasLimit,
+                _args.unsafeBlockSigner,
+                _args.resourceConfig,
+                _args.addrs,
+                _args.l2ChainId,
+                _args.superchainConfig
+            )
         );
     }
 
@@ -58,6 +84,28 @@ abstract contract OPContractsManagerUtilsCaller {
         return abi.decode(
             _staticcall(abi.encodeCall(IOPContractsManagerUtils.computeSalt, (_l2ChainId, _saltMixer, _contractName))),
             (bytes32)
+        );
+    }
+
+    /// @notice Helper for checking whether a chain may be upgraded by this OPCM.
+    /// @param _systemConfig The SystemConfig of the chain to check.
+    /// @param _opcm The OPCM performing the upgrade.
+    /// @return True if the upgrade sequence is permitted.
+    function _isPermittedUpgradeSequence(ISystemConfig _systemConfig, address _opcm) internal view returns (bool) {
+        return abi.decode(
+            _staticcall(abi.encodeCall(IOPContractsManagerUtils.isPermittedUpgradeSequence, (_systemConfig, _opcm))),
+            (bool)
+        );
+    }
+
+    /// @notice Helper for checking whether a chain is on this OPCM's release and may be migrated.
+    /// @param _systemConfig The SystemConfig of the chain to check.
+    /// @param _opcm The OPCM performing the migration.
+    /// @return True if the chain may be migrated.
+    function _isPermittedMigrateSequence(ISystemConfig _systemConfig, address _opcm) internal view returns (bool) {
+        return abi.decode(
+            _staticcall(abi.encodeCall(IOPContractsManagerUtils.isPermittedMigrateSequence, (_systemConfig, _opcm))),
+            (bool)
         );
     }
 
@@ -158,7 +206,9 @@ abstract contract OPContractsManagerUtilsCaller {
     /// @param _proxyAdmin The proxy admin of the contract.
     /// @param _target The target of the contract.
     /// @param _implementation The implementation of the contract.
-    /// @param _data The data to call the initializer with.
+    /// @param _data The data to call the initializer with. Must be called and not left empty.
+    /// @dev make sure _data is not empty and calls the initializer. otherwise it can lead to
+    ///      unsupported OZ v5 Initializable contracts being used.
     function _upgrade(IProxyAdmin _proxyAdmin, address _target, address _implementation, bytes memory _data) internal {
         _upgrade(_proxyAdmin, _target, _implementation, _data, bytes32(0), 0);
     }

@@ -13,13 +13,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 )
 
@@ -247,7 +247,7 @@ func Auto(
 					continue
 				}
 				log.Info("status", "head", status.Head, "safe", status.Safe, "finalized", status.Finalized,
-					"head_time", status.Head.Time, "txs", status.Txs, "gas", status.Gas, "basefee", status.Gas)
+					"head_time", status.Head.Time, "txs", status.Txs, "gas", status.Gas, "basefee", status.BaseFee)
 
 				// On a mocked "beacon epoch transition", update finalization and justification checkpoints.
 				// There are no gap slots, so we just go back 32 blocks.

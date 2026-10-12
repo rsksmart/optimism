@@ -6,7 +6,7 @@ use crate::{
 use alloy_eips::{BlockNumberOrTag, eip2718::WithEncoded};
 use alloy_primitives::B256;
 use op_alloy_rpc_types_engine::OpFlashblockPayloadBase;
-use reth_chain_state::{ComputedTrieData, ExecutedBlock};
+use reth_chain_state::ExecutedBlock;
 use reth_errors::RethError;
 use reth_evm::{
     ConfigureEvm, Evm,
@@ -30,6 +30,7 @@ use reth_storage_api::{
     BlockReaderIdExt, HashedPostStateProvider, StateProviderFactory, StateRootProvider,
     noop::NoopProvider,
 };
+use reth_trie_common::ComputedTrieData;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -327,14 +328,16 @@ where
 
             let (hashed_state, state_root) = if args.compute_state_root {
                 trace!(target: "flashblocks", "Computing block state root");
-                let hashed_state = state_provider.hashed_post_state(&db.bundle_state);
+                let hashed_state =
+                    state_provider.hashed_post_state(&db.bundle_state).map_err(RethError::other)?;
                 let (state_root, _) = state_provider
                     .state_root_with_updates(hashed_state.clone())
                     .map_err(RethError::other)?;
                 (hashed_state, state_root)
             } else {
                 let noop_provider = NoopProvider::default();
-                let hashed_state = noop_provider.hashed_post_state(&db.bundle_state);
+                let hashed_state =
+                    noop_provider.hashed_post_state(&db.bundle_state).map_err(RethError::other)?;
                 let (state_root, _) = noop_provider
                     .state_root_with_updates(hashed_state.clone())
                     .map_err(RethError::other)?;
@@ -356,6 +359,7 @@ where
                     &bundle,
                     &state_provider,
                     state_root,
+                    None,
                 ))
                 .map_err(RethError::other)?;
             let block = RecoveredBlock::new_unhashed(block, senders);
@@ -435,10 +439,7 @@ where
             ExecutedBlock::new(
                 block.into(),
                 execution_outcome,
-                ComputedTrieData::without_trie_input(
-                    Arc::new(hashed_state.into_sorted()),
-                    Arc::default(),
-                ),
+                ComputedTrieData::new(Arc::new(hashed_state.into_sorted()), Arc::default()),
             ),
         );
         let pending_flashblock = PendingFlashBlock::new(

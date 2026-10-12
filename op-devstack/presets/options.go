@@ -5,6 +5,7 @@ import (
 
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
+	nodeSync "github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -154,6 +155,27 @@ func WithGlobalL2CLOption(opt sysgo.L2CLOption) Option {
 	}
 }
 
+// WithSupernodeVerifierSyncMode overrides the supernode VN's sync mode.
+func WithSupernodeVerifierSyncMode(mode nodeSync.Mode) Option {
+	return option{
+		kinds: optionKindSupernodeVerifierSyncMode,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			m := mode
+			cfg.SupernodeVerifierSyncMode = &m
+		},
+	}
+}
+
+// WithInteropActivationDelay sets the Interop activation offset past genesis.
+func WithInteropActivationDelay(delaySeconds uint64) Option {
+	return option{
+		kinds: optionKindInteropActivationDelay,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.InteropActivationDelaySeconds = delaySeconds
+		},
+	}
+}
+
 func WithGlobalSyncTesterELOption(opt sysgo.SyncTesterELOption) Option {
 	var kinds optionKinds
 	if opt != nil {
@@ -196,10 +218,10 @@ func WithProposerOption(opt sysgo.ProposerOption) Option {
 	}
 }
 
-func WithOPRBuilderOption(opt sysgo.OPRBuilderNodeOption) Option {
+func WithZKProposerOption(opt sysgo.ZKProposerOption) Option {
 	var kinds optionKinds
 	if opt != nil {
-		kinds = optionKindOPRBuilder
+		kinds = optionKindZKProposer
 	}
 	return option{
 		kinds: kinds,
@@ -207,7 +229,26 @@ func WithOPRBuilderOption(opt sysgo.OPRBuilderNodeOption) Option {
 			if opt == nil {
 				return
 			}
-			cfg.OPRBuilderOptions = append(cfg.OPRBuilderOptions, opt)
+			cfg.ZKProposerOptions = append(cfg.ZKProposerOptions, opt)
+		},
+	}
+}
+
+// WithOpRethOption applies an op-reth option to every EL in the preset that can sequence. Nodes
+// that only verify stay on stock op-reth, so a binary override here yields a sequencing-builds /
+// stock-verifies split rather than a uniform swap.
+func WithOpRethOption(opt sysgo.OpRethOption) Option {
+	var kinds optionKinds
+	if opt != nil {
+		kinds = optionKindOpReth
+	}
+	return option{
+		kinds: kinds,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			if opt == nil {
+				return
+			}
+			cfg.OpRethOptions = append(cfg.OpRethOptions, opt)
 		},
 	}
 }
@@ -289,6 +330,12 @@ func WithL2BlockTimes(blockTimes map[eth.ChainID]uint64) Option {
 	return WithDeployerOptions(sysgo.WithL2BlockTimes(blockTimes))
 }
 
+// WithUniformL2BlockTimes configures the same L2 block time (in seconds) on
+// every configured L2 chain via the deployer.
+func WithUniformL2BlockTimes(seconds uint64) Option {
+	return WithDeployerOptions(sysgo.WithUniformL2BlockTimes(seconds))
+}
+
 // WithInteropLogBackfillDepth configures the supernode to pre-ingest
 // initiating-message logs backward from the tip by the given duration at
 // startup. Zero disables backfill (the default).
@@ -301,6 +348,66 @@ func WithInteropLogBackfillDepth(d time.Duration) Option {
 		kinds: kinds,
 		applyFn: func(cfg *sysgo.PresetConfig) {
 			cfg.InteropLogBackfillDepth = d
+		},
+	}
+}
+
+// WithoutHonestProposer skips starting the honest proposer (op-proposer, or kona-sp1-proposer for the ZK preset).
+func WithoutHonestProposer() Option {
+	return option{
+		kinds: optionKindSkipHonestProposer,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.SkipHonestProposer = true
+		},
+	}
+}
+
+// WithoutHonestChallenger skips starting the honest challenger. Used by tests
+// that must prove the proposer alone drives resolution and bond claiming.
+func WithoutHonestChallenger() Option {
+	return option{
+		kinds: optionKindSkipHonestChallenger,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.SkipHonestChallenger = true
+		},
+	}
+}
+
+// WithConductorFastHealthChecks runs conductor health checks every second so
+// health-based failover reacts to sequencer failures within test timescales.
+// The default conductor preset effectively disables health monitoring (hourly
+// checks) to keep manual leadership operations deterministic.
+func WithConductorFastHealthChecks() Option {
+	return option{
+		kinds: optionKindConductorFastHealthChecks,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.ConductorFastHealthChecks = true
+		},
+	}
+}
+
+// WithInteropAtGenesis activates the Lagoon hardfork at genesis on the L2 chain and provisions
+// a DependencySet for op-node startup without a supervisor. Required by presets that exercise
+// interop-gated consensus features (e.g. SDM PostExec).
+func WithInteropAtGenesis() Option {
+	return option{
+		kinds: optionKindInteropAtGenesis,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.InteropAtGenesis = true
+		},
+	}
+}
+
+// WithSupernodeVNSequencerForBootstrap enables sequencing on the supernode VN of
+// the light-sequencer supernode interop preset and starts the light follow-mode
+// ELSync sequencers stopped, so the VN can bootstrap the chain the light sequencers
+// EL-sync from. Pair with the system's BootstrapLightSequencersViaVNHandoff method,
+// which drives the bootstrap and hands sequencing off to the light sequencers (#21164).
+func WithSupernodeVNSequencerForBootstrap() Option {
+	return option{
+		kinds: optionKindSupernodeVNSequencerForBootstrap,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.SupernodeVNSequencerForBootstrap = true
 		},
 	}
 }

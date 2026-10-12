@@ -12,23 +12,27 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis/beacondeposit"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
+	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum-optimism/optimism/op-core/devfeatures"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/manage"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 )
 
 var (
 	// sysGenesisDeployer is used as tx.origin/msg.sender on system genesis script calls.
 	// At the end we verify none of the deployed contracts persist (there may be temporary ones, to insert bytecode).
 	sysGenesisDeployer = common.Address(crypto.Keccak256([]byte("System genesis deployer"))[12:])
+
+	// defaultInitBond matches Deploy.s.sol DEFAULT_INIT_BOND (0.08 ether).
+	defaultInitBond = big.NewInt(8e16)
 )
 
 func Deploy(logger log.Logger, fa *foundry.ArtifactsFS, srcFS *foundry.SourceMapFS, cfg *WorldConfig) (*WorldDeployment, *WorldOutput, error) {
@@ -178,11 +182,6 @@ func DeploySuperchainToL1(l1Host *script.Host, opcmScripts *opcm.Scripts, superC
 		SuperchainProxyAdminOwner: superCfg.ProxyAdminOwner,
 		Guardian:                  superCfg.SuperchainConfigGuardian,
 		Paused:                    superCfg.Paused,
-		// Non-zero placeholders for the deprecated ProtocolVersions* inputs;
-		// PR 2 of #20309 removes them from the Solidity script.
-		ProtocolVersionsOwner:      superCfg.ProxyAdminOwner,
-		RequiredProtocolVersion:    common.Hash{0x01},
-		RecommendedProtocolVersion: common.Hash{0x01},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to deploy Superchain contracts: %w", err)
@@ -202,10 +201,9 @@ func DeploySuperchainToL1(l1Host *script.Host, opcmScripts *opcm.Scripts, superC
 		FaultGameV2MaxClockDuration:     big.NewInt(302400),
 		SuperchainProxyAdmin:            superDeployment.SuperchainProxyAdmin,
 		SuperchainConfigProxy:           superDeployment.SuperchainConfigProxy,
-		// Non-zero placeholder; PR 2 of #20309 removes the field.
-		ProtocolVersionsProxy: superDeployment.ProtocolVersionsProxy,
-		L1ProxyAdminOwner:     superCfg.ProxyAdminOwner,
-		Challenger:            superCfg.Challenger,
+		L1ProxyAdminOwner:               superCfg.ProxyAdminOwner,
+		Challenger:                      superCfg.Challenger,
+		SP1Verifier:                     common.Address{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to deploy Implementations contracts: %w", err)
@@ -232,22 +230,28 @@ func DeployL2ToL1(l1Host *script.Host, superCfg *SuperchainConfig, superDeployme
 	if err != nil {
 		return nil, fmt.Errorf("failed to load DeployOPChain script: %w", err)
 	}
+	selectedAbsolutePrestate, cannonAbsolutePrestate := initialDisputeAbsolutePrestates(cfg)
 
 	output, err := deployOPChainScript.Run(opcm.DeployOPChainInput{
-		OpChainProxyAdminOwner:       superCfg.ProxyAdminOwner,
-		SystemConfigOwner:            cfg.SystemConfigOwner,
-		Batcher:                      cfg.BatchSenderAddress,
-		UnsafeBlockSigner:            cfg.P2PSequencerAddress,
-		Proposer:                     cfg.Proposer,
-		Challenger:                   cfg.Challenger,
-		BasefeeScalar:                cfg.GasPriceOracleBaseFeeScalar,
-		BlobBaseFeeScalar:            cfg.GasPriceOracleBlobBaseFeeScalar,
-		L2ChainId:                    new(big.Int).SetUint64(cfg.L2ChainID),
-		Opcm:                         superDeployment.OpcmV2,
-		SaltMixer:                    cfg.SaltMixer,
-		GasLimit:                     cfg.GasLimit,
-		DisputeGameType:              cfg.DisputeGameType,
-		DisputeAbsolutePrestate:      cfg.DisputeAbsolutePrestate,
+		OpChainProxyAdminOwner:  superCfg.ProxyAdminOwner,
+		SystemConfigOwner:       cfg.SystemConfigOwner,
+		Batcher:                 cfg.BatchSenderAddress,
+		UnsafeBlockSigner:       cfg.P2PSequencerAddress,
+		Proposer:                cfg.Proposer,
+		Challenger:              cfg.Challenger,
+		BasefeeScalar:           cfg.GasPriceOracleBaseFeeScalar,
+		BlobBaseFeeScalar:       cfg.GasPriceOracleBlobBaseFeeScalar,
+		L2ChainId:               new(big.Int).SetUint64(cfg.L2ChainID),
+		Opcm:                    superDeployment.OpcmV2,
+		SaltMixer:               cfg.SaltMixer,
+		GasLimit:                cfg.GasLimit,
+		DisputeGameType:         cfg.DisputeGameType,
+		DisputeAbsolutePrestate: selectedAbsolutePrestate,
+		StartingAnchorRoot: opcm.Proposal{
+			Root:             opcm.DefaultStartingAnchorRoot.Root,
+			L2SequenceNumber: common.Big0,
+		},
+		CannonAbsolutePrestate:       cannonAbsolutePrestate,
 		DisputeMaxGameDepth:          new(big.Int).SetUint64(cfg.DisputeMaxGameDepth),
 		DisputeSplitDepth:            new(big.Int).SetUint64(cfg.DisputeSplitDepth),
 		DisputeClockExtension:        cfg.DisputeClockExtension,
@@ -268,6 +272,14 @@ func DeployL2ToL1(l1Host *script.Host, superCfg *SuperchainConfig, superDeployme
 	}, nil
 }
 
+func initialDisputeAbsolutePrestates(cfg *L2Config) (common.Hash, common.Hash) {
+	selectedAbsolutePrestate := cfg.DisputeAbsolutePrestate
+	if cfg.DisputeGameType == uint32(gameTypes.CannonKonaGameType) {
+		selectedAbsolutePrestate = cfg.DisputeKonaAbsolutePrestate
+	}
+	return selectedAbsolutePrestate, cfg.DisputeAbsolutePrestate
+}
+
 func MigrateInterop(
 	l1Host *script.Host, l1GenesisTimestamp uint64, superCfg *SuperchainConfig, superDeployment *SuperchainDeployment, l2Cfgs map[string]*L2Config, l2Deployments map[string]*L2Deployment,
 ) (*InteropDeployment, error) {
@@ -283,16 +295,11 @@ func MigrateInterop(
 		chainSystemConfigs[i] = l2Deployments[l2ChainID].SystemConfigProxy
 	}
 
-	// ABI-encode the cannon prestates as game args (from the first chain config).
+	// ABI-encode the cannon kona prestate as game args (from the first chain config).
 	l2ChainID := l2ChainIDs[0]
-	cannonGameArgs := common.LeftPadBytes(l2Cfgs[l2ChainID].DisputeAbsolutePrestate.Bytes(), 32)
 	cannonKonaGameArgs := common.LeftPadBytes(l2Cfgs[l2ChainID].DisputeKonaAbsolutePrestate.Bytes(), 32)
 
-	const (
-		GameTypeCannon          = uint32(0)
-		GameTypeSuperCannon     = uint32(4)
-		GameTypeSuperCannonKona = uint32(9)
-	)
+	const GameTypeSuperCannonKona = uint32(9)
 
 	imi := manage.InteropMigrationInput{
 		Prank: superCfg.ProxyAdminOwner,
@@ -302,19 +309,7 @@ func MigrateInterop(
 			DisputeGameConfigs: []manage.DisputeGameConfig{
 				{
 					Enabled:  true,
-					InitBond: big.NewInt(0),
-					GameType: GameTypeCannon,
-					GameArgs: cannonGameArgs,
-				},
-				{
-					Enabled:  true,
-					InitBond: big.NewInt(0),
-					GameType: GameTypeSuperCannon,
-					GameArgs: cannonGameArgs,
-				},
-				{
-					Enabled:  true,
-					InitBond: big.NewInt(0),
+					InitBond: new(big.Int).Set(defaultInitBond),
 					GameType: GameTypeSuperCannonKona,
 					GameArgs: cannonKonaGameArgs,
 				},
@@ -323,7 +318,7 @@ func MigrateInterop(
 				Root:             startingAnchorRoot,
 				L2SequenceNumber: big.NewInt(int64(l1GenesisTimestamp)),
 			},
-			StartingRespectedGameType: GameTypeSuperCannon,
+			StartingRespectedGameType: GameTypeSuperCannonKona,
 		},
 	}
 	output, err := manage.Migrate(l1Host, imi)
@@ -370,8 +365,8 @@ func GenesisL2(l2Host *script.Host, cfg *L2Config, deployment *L2Deployment, mul
 		GasPayingTokenSymbol:                     cfg.GasPayingTokenSymbol,
 		NativeAssetLiquidityAmount:               cfg.NativeAssetLiquidityAmount.ToInt(),
 		LiquidityControllerOwner:                 cfg.LiquidityControllerOwner,
-		DevFeatureBitmap:                         devFeatureBitmapForL2Genesis(multichainDepSet && interopAtGenesis(cfg.L2GenesisInteropTimeOffset), cfg.UseL2CM),
-		UseInterop:                               multichainDepSet && interopAtGenesis(cfg.L2GenesisInteropTimeOffset),
+		DevFeatureBitmap:                         devFeatureBitmapForL2Genesis(multichainDepSet && lagoonAtGenesis(cfg.L2GenesisLagoonTimeOffset)),
+		UseInterop:                               multichainDepSet && lagoonAtGenesis(cfg.L2GenesisLagoonTimeOffset),
 	}); err != nil {
 		return fmt.Errorf("failed L2 genesis: %w", err)
 	}
@@ -379,21 +374,17 @@ func GenesisL2(l2Host *script.Host, cfg *L2Config, deployment *L2Deployment, mul
 	return nil
 }
 
-// interopAtGenesis returns true if the Interop fork is scheduled to activate at genesis.
-// Using a nil offset means Interop is not scheduled at all.
-func interopAtGenesis(interopOffset *hexutil.Uint64) bool {
-	return interopOffset != nil && *interopOffset == 0
+// lagoonAtGenesis returns true if the Lagoon (interop activation) fork is scheduled at genesis.
+// Using a nil offset means Lagoon (and thus interop) is not scheduled at all.
+func lagoonAtGenesis(lagoonOffset *hexutil.Uint64) bool {
+	return lagoonOffset != nil && *lagoonOffset == 0
 }
 
-// devFeatureBitmapForL2Genesis returns the dev feature bitmap for the Interop and L2CM flags.
-// TODO(#20084): drop useL2CM and the L2CMFlag branch once DevFeatures are removed.
-func devFeatureBitmapForL2Genesis(enableInterop, useL2CM bool) common.Hash {
+// devFeatureBitmapForL2Genesis returns the dev feature bitmap for the Interop flag.
+func devFeatureBitmapForL2Genesis(enableInterop bool) common.Hash {
 	var bitmap common.Hash
 	if enableInterop {
 		bitmap = devfeatures.EnableDevFeature(bitmap, devfeatures.OptimismPortalInteropFlag)
-	}
-	if useL2CM {
-		bitmap = devfeatures.EnableDevFeature(bitmap, devfeatures.L2CMFlag)
 	}
 	return bitmap
 }
@@ -471,6 +462,13 @@ func CompleteL2(l2Host *script.Host, cfg *L2Config, l1Block *types.Block, deploy
 	// and make sure it's not in the state.
 	if err := ensureNoDeployed(allocs, sysGenesisDeployer); err != nil {
 		return nil, fmt.Errorf("unexpected deployed account content by L2 genesis deployer: %w", err)
+	}
+
+	if err := genesis.CheckL2GenesisAllocs(allocs, genesis.CheckL2AllocsOpts{
+		FundDevAccounts: cfg.FundDevAccounts,
+		AllowedEOAs:     slices.Collect(maps.Keys(cfg.Prefund)),
+	}); err != nil {
+		return nil, fmt.Errorf("L2 genesis allocs failed validation: %w", err)
 	}
 
 	for addr, amount := range cfg.Prefund {

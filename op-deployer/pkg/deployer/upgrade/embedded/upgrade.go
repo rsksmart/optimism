@@ -3,6 +3,7 @@ package embedded
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
@@ -18,8 +19,7 @@ type GameType uint32
 const (
 	GameTypeCannon             GameType = 0
 	GameTypePermissionedCannon GameType = 1
-	GameTypeSuperCannon        GameType = 4
-	GameTypeSuperPermCannon    GameType = 5
+	GameTypeSuperPermissioned  GameType = 5
 	GameTypeCannonKona         GameType = 8
 	GameTypeSuperCannonKona    GameType = 9
 	GameTypeZKDisputeGame      GameType = 10
@@ -32,8 +32,11 @@ var (
 	// This is used to encode the permissioned dispute game config for the upgrade input
 	permEncoder = w3.MustNewFunc("dummy((bytes32 absolutePrestate,address proposer,address challenger))", "")
 
+	// This is used to encode the super-permissioned dispute game config for the upgrade input
+	superPermEncoder = w3.MustNewFunc("dummy((address proposer))", "")
+
 	// This is used to encode the ZK dispute game config for the upgrade input
-	zkEncoder = w3.MustNewFunc("dummy((bytes32 absolutePrestate,address verifier,uint64 maxChallengeDuration,uint64 maxProveDuration,uint256 challengerBond))", "")
+	zkEncoder = w3.MustNewFunc("dummy((bytes32 absolutePrestate,uint64 maxChallengeDuration,uint64 maxProveDuration,uint256 challengerBond))", "")
 
 	// This is used to encode the upgrade input for the upgrade input
 	upgradeInputEncoder = w3.MustNewFunc("dummy((address systemConfig,(bool enabled,uint256 initBond,uint32 gameType,bytes gameArgs)[] disputeGameConfigs,(string key,bytes data)[] extraInstructions))",
@@ -64,12 +67,13 @@ type UpgradeInputV2 struct {
 
 // DisputeGameConfig represents the configuration for a dispute game.
 type DisputeGameConfig struct {
-	Enabled                       bool                           `json:"enabled"`
-	InitBond                      *big.Int                       `json:"initBond"`
-	GameType                      GameType                       `json:"gameType"`
-	FaultDisputeGameConfig        *FaultDisputeGameConfig        `json:"faultDisputeGameConfig,omitempty"`
-	PermissionedDisputeGameConfig *PermissionedDisputeGameConfig `json:"permissionedDisputeGameConfig,omitempty"`
-	ZKDisputeGameConfig           *ZKDisputeGameConfig           `json:"zkDisputeGameConfig,omitempty"`
+	Enabled                            bool                                `json:"enabled"`
+	InitBond                           *big.Int                            `json:"initBond"`
+	GameType                           GameType                            `json:"gameType"`
+	FaultDisputeGameConfig             *FaultDisputeGameConfig             `json:"faultDisputeGameConfig,omitempty"`
+	PermissionedDisputeGameConfig      *PermissionedDisputeGameConfig      `json:"permissionedDisputeGameConfig,omitempty"`
+	SuperPermissionedDisputeGameConfig *SuperPermissionedDisputeGameConfig `json:"superPermissionedDisputeGameConfig,omitempty"`
+	ZKDisputeGameConfig                *ZKDisputeGameConfig                `json:"zkDisputeGameConfig,omitempty"`
 }
 
 // ExtraInstruction represents an additional upgrade instruction for the upgrade on OPCM v2.
@@ -92,14 +96,19 @@ type PermissionedDisputeGameConfig struct {
 	Challenger       common.Address `json:"challenger"`
 }
 
+// SuperPermissionedDisputeGameConfig represents the configuration for a super-permissioned dispute game.
+// It contains the proposer of the super-permissioned dispute game.
+type SuperPermissionedDisputeGameConfig struct {
+	Proposer common.Address `json:"proposer"`
+}
+
 // ZKDisputeGameConfig represents the configuration for a ZK dispute game.
-// It contains the absolute prestate, verifier address, challenge/prove durations, and challenger bond.
+// It contains the absolute prestate, challenge/prove durations, and challenger bond.
 type ZKDisputeGameConfig struct {
-	AbsolutePrestate     common.Hash    `json:"absolutePrestate"`
-	Verifier             common.Address `json:"verifier"`
-	MaxChallengeDuration uint64         `json:"maxChallengeDuration"`
-	MaxProveDuration     uint64         `json:"maxProveDuration"`
-	ChallengerBond       *big.Int       `json:"challengerBond"`
+	AbsolutePrestate     common.Hash `json:"absolutePrestate"`
+	MaxChallengeDuration uint64      `json:"maxChallengeDuration"`
+	MaxProveDuration     uint64      `json:"maxProveDuration"`
+	ChallengerBond       *big.Int    `json:"challengerBond"`
 }
 
 // EncodableUpgradeInput is an intermediate struct that matches the encoder expectation for the UpgradeInputV2 struct.
@@ -131,7 +140,7 @@ func (u *UpgradeOPChainInput) EncodedUpgradeInputV2() ([]byte, error) {
 
 		if gameConfig.Enabled {
 			switch gameConfig.GameType {
-			case GameTypeCannon, GameTypeCannonKona, GameTypeSuperCannon, GameTypeSuperCannonKona:
+			case GameTypeCannon, GameTypeCannonKona, GameTypeSuperCannonKona:
 				if gameConfig.FaultDisputeGameConfig == nil {
 					return nil, fmt.Errorf("faultDisputeGameConfig is required for game type %d", gameConfig.GameType)
 				}
@@ -140,7 +149,7 @@ func (u *UpgradeOPChainInput) EncodedUpgradeInputV2() ([]byte, error) {
 				if err != nil {
 					return nil, fmt.Errorf("failed to encode fault game config: %w", err)
 				}
-			case GameTypePermissionedCannon, GameTypeSuperPermCannon:
+			case GameTypePermissionedCannon:
 				if gameConfig.PermissionedDisputeGameConfig == nil {
 					return nil, fmt.Errorf("permissionedDisputeGameConfig is required for game type %d", gameConfig.GameType)
 				}
@@ -149,9 +158,39 @@ func (u *UpgradeOPChainInput) EncodedUpgradeInputV2() ([]byte, error) {
 				if err != nil {
 					return nil, fmt.Errorf("failed to encode permissioned game config: %w", err)
 				}
+			case GameTypeSuperPermissioned:
+				if gameConfig.SuperPermissionedDisputeGameConfig == nil {
+					return nil, fmt.Errorf("superPermissionedDisputeGameConfig is required for game type %d", gameConfig.GameType)
+				}
+				// Encode the super-permissioned dispute game args
+				gameArgs, err = superPermEncoder.EncodeArgs(gameConfig.SuperPermissionedDisputeGameConfig)
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode super permissioned game config: %w", err)
+				}
 			case GameTypeZKDisputeGame:
 				if gameConfig.ZKDisputeGameConfig == nil {
 					return nil, fmt.Errorf("zkDisputeGameConfig is required for game type %d", gameConfig.GameType)
+				}
+				zk := gameConfig.ZKDisputeGameConfig
+				if zk.AbsolutePrestate == (common.Hash{}) {
+					return nil, fmt.Errorf("ZKDisputeGameConfig.AbsolutePrestate must not be zero for game type %d", gameConfig.GameType)
+				}
+				if zk.MaxChallengeDuration == 0 {
+					return nil, fmt.Errorf("ZKDisputeGameConfig.MaxChallengeDuration must be > 0 for game type %d", gameConfig.GameType)
+				}
+				// Capped at uint32 max so block.timestamp + duration cannot overflow the game's
+				// uint64 deadline cast, which would place the deadline in the past.
+				if zk.MaxChallengeDuration > math.MaxUint32 {
+					return nil, fmt.Errorf("ZKDisputeGameConfig.MaxChallengeDuration must be <= %d seconds for game type %d, got %d", uint64(math.MaxUint32), gameConfig.GameType, zk.MaxChallengeDuration)
+				}
+				if zk.MaxProveDuration == 0 {
+					return nil, fmt.Errorf("ZKDisputeGameConfig.MaxProveDuration must be > 0 for game type %d", gameConfig.GameType)
+				}
+				if zk.MaxProveDuration > math.MaxUint32 {
+					return nil, fmt.Errorf("ZKDisputeGameConfig.MaxProveDuration must be <= %d seconds for game type %d, got %d", uint64(math.MaxUint32), gameConfig.GameType, zk.MaxProveDuration)
+				}
+				if zk.ChallengerBond == nil || zk.ChallengerBond.Sign() <= 0 {
+					return nil, fmt.Errorf("ZKDisputeGameConfig.ChallengerBond must be set to a positive value for game type %d", gameConfig.GameType)
 				}
 				// Encode the ZK dispute game args
 				gameArgs, err = zkEncoder.EncodeArgs(gameConfig.ZKDisputeGameConfig)

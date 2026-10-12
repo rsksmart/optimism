@@ -93,6 +93,17 @@ is_excluded() {
 temp_dir=$(mktemp -d)
 trap 'rm -rf "$temp_dir"' EXIT
 
+# The check runner regenerates semver-lock.json (the `snapshots` check) before
+# this script runs, so in CI's clean checkout any diff here means the committed
+# lock was not generated from this source tree (e.g. stale after a semantic
+# merge). Skipped locally, where an uncommitted lock is normal during dev.
+if [ -n "${CI:-}" ] && ! git diff --quiet -- "$SEMVER_LOCK"; then
+  echo "❌ Error: committed $SEMVER_LOCK does not match the regenerated version."
+  git --no-pager diff -- "$SEMVER_LOCK"
+  echo "To fix: run 'just semver-lock' and commit the updated $SEMVER_LOCK."
+  exit 1
+fi
+
 # Exit early if semver-lock.json has not changed.
 UPSTREAM_REF="origin/${TARGET_BRANCH}"
 if ! git rev-parse --verify --quiet "$UPSTREAM_REF" > /dev/null; then
@@ -101,9 +112,9 @@ if ! git rev-parse --verify --quiet "$UPSTREAM_REF" > /dev/null; then
 fi
 
 changed_files="$temp_dir/changed_files.txt"
-git diff "$UPSTREAM_REF"...HEAD --name-only > "$changed_files"
-git diff --name-only >> "$changed_files"
-git diff --cached --name-only >> "$changed_files"
+git diff --relative "$UPSTREAM_REF"...HEAD --name-only > "$changed_files"
+git diff --relative --name-only >> "$changed_files"
+git diff --relative --cached --name-only >> "$changed_files"
 
 if ! grep -qx "$SEMVER_LOCK" "$changed_files"; then
   echo "No changes detected in semver-lock.json"

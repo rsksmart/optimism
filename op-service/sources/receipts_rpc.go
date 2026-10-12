@@ -9,11 +9,11 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 )
 
 func newRPCRecProviderFromConfig(client client.RPC, log log.Logger, metrics caching.Metrics, config *EthClientConfig) *CachingReceiptsProvider {
@@ -80,7 +80,7 @@ func NewRPCReceiptsFetcher(client rpcClient, log log.Logger, config RPCReceiptsC
 	}
 }
 
-func (f *RPCReceiptsFetcher) FetchReceipts(ctx context.Context, blockInfo eth.BlockInfo, txHashes []common.Hash) (result types.Receipts, err error) {
+func (f *RPCReceiptsFetcher) FetchReceipts(ctx context.Context, blockInfo eth.BlockInfo, txHashes []common.Hash) (result optypes.Receipts, err error) {
 	m := f.PickReceiptsMethod(len(txHashes))
 	block := eth.ToBlockID(blockInfo)
 	switch m {
@@ -116,7 +116,9 @@ func (f *RPCReceiptsFetcher) FetchReceipts(ctx context.Context, blockInfo eth.Bl
 	}
 
 	if f.validator != nil {
-		if err = f.validator(ctx, block, blockInfo.ReceiptHash(), txHashes, result); err != nil {
+		// The hook sees the standard go-ethereum receipt fields only, which is
+		// all a non-Ethereum L1 receipt carries.
+		if err = f.validator(ctx, block, blockInfo.ReceiptHash(), txHashes, result.Geth()); err != nil {
 			return nil, err
 		}
 	} else if err = validateReceipts(block, blockInfo.ReceiptHash(), txHashes, result); err != nil {
@@ -128,7 +130,7 @@ func (f *RPCReceiptsFetcher) FetchReceipts(ctx context.Context, blockInfo eth.Bl
 
 // receiptsWrapper is a decoding type util. Alchemy in particular wraps the receipts array result.
 type receiptsWrapper struct {
-	Receipts []*types.Receipt `json:"receipts"`
+	Receipts []*optypes.Receipt `json:"receipts"`
 }
 
 func (f *RPCReceiptsFetcher) PickReceiptsMethod(txCount int) ReceiptsFetchingMethod {

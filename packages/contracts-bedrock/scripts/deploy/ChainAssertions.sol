@@ -12,10 +12,10 @@ import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 
 // Libraries
 import { Constants } from "src/libraries/Constants.sol";
+import { Features } from "src/libraries/Features.sol";
 import { Types } from "scripts/libraries/Types.sol";
 import { Blueprint } from "src/libraries/Blueprint.sol";
-import { GameType, GameTypes } from "src/dispute/lib/Types.sol";
-import { Hash } from "src/dispute/lib/Types.sol";
+import { GameType, Proposal } from "src/dispute/lib/Types.sol";
 // Interfaces
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
@@ -26,7 +26,6 @@ import { IL1CrossDomainMessenger } from "interfaces/L1/IL1CrossDomainMessenger.s
 import { IOptimismPortal2 as IOptimismPortal } from "interfaces/L1/IOptimismPortal2.sol";
 import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
 import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
-import { ProtocolVersion, IProtocolVersions } from "interfaces/L1/IProtocolVersions.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
@@ -36,7 +35,6 @@ import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
 import { IProxyAdminOwnedBase } from "interfaces/universal/IProxyAdminOwnedBase.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
-import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import { IZKDisputeGame } from "interfaces/dispute/zk/IZKDisputeGame.sol";
 
 library ChainAssertions {
@@ -81,7 +79,6 @@ library ChainAssertions {
         require(resourceConfig.maximumBaseFee == 0, "CHECK-SCFG-350");
         // Check _addresses
         require(config.startBlock() == type(uint256).max, "CHECK-SCFG-360");
-        require(config.batchInbox() == address(0), "CHECK-SCFG-370");
         require(config.l1CrossDomainMessenger() == address(0), "CHECK-SCFG-380");
         require(config.l1ERC721Bridge() == address(0), "CHECK-SCFG-390");
         require(config.l1StandardBridge() == address(0), "CHECK-SCFG-400");
@@ -112,12 +109,6 @@ library ChainAssertions {
         require(config.scalar() >> 248 == 1, "CHECK-SCFG-70");
         // Depends on start block being set to 0 in `initialize`
         require(config.startBlock() == block.number, "CHECK-SCFG-140");
-        require(
-            config.batchInbox()
-                == IOPContractsManagerUtils(IOPContractsManagerV2(address(_doi.opcm)).opcmUtils())
-                    .chainIdToBatchInboxAddress(_doi.l2ChainId),
-            "CHECK-SCFG-150"
-        );
         // Check _addresses
         require(config.l1CrossDomainMessenger() == _contracts.L1CrossDomainMessenger, "CHECK-SCFG-160");
         require(config.l1ERC721Bridge() == _contracts.L1ERC721Bridge, "CHECK-SCFG-170");
@@ -284,10 +275,8 @@ library ChainAssertions {
             require(address(portal.superchainConfig()) == address(_superchainConfig), "PORTAL-40");
             require(portal.guardian() == _superchainConfig.guardian(), "CHECK-OP2-40");
             require(portal.paused() == ISystemConfig(_contracts.SystemConfig).paused(), "CHECK-OP2-60");
-            require(
-                address(portal.ethLockbox()) == _contracts.ETHLockbox || address(portal.ethLockbox()) == address(0),
-                "CHECK-OP2-80"
-            );
+            require(address(portal.ethLockbox()) == _contracts.ETHLockbox, "CHECK-OP2-80");
+            require(ISystemConfig(_contracts.SystemConfig).isFeatureEnabled(Features.ETH_LOCKBOX), "CHECK-OP2-85");
             require(portal.proxyAdminOwner() == _opChainProxyAdminOwner, "CHECK-OP2-90");
         } else {
             require(address(portal.anchorStateRegistry()) == address(0), "CHECK-OP2-80");
@@ -308,39 +297,8 @@ library ChainAssertions {
         // Check that the contract is initialized
         DeployUtils.assertInitialized({ _contractAddress: address(_ethLockbox), _isProxy: false, _slot: 0, _offset: 0 });
 
-        require(address(_ethLockbox.systemConfig()) == address(0), "CHECK-ELB-50");
+        require(address(_ethLockbox.superchainConfig()) == address(0), "CHECK-ELB-50");
         require(_ethLockbox.authorizedPortals(_portal) == false, "CHECK-ELB-60");
-    }
-
-    /// @notice Asserts that the ProtocolVersions is setup correctly
-    function checkProtocolVersions(
-        Types.ContractSet memory _contracts,
-        DeployConfig _cfg,
-        bool _isProxy
-    )
-        internal
-        view
-    {
-        IProtocolVersions versions = IProtocolVersions(_contracts.ProtocolVersions);
-        console.log(
-            "Running chain assertions on the ProtocolVersions %s at %s",
-            _isProxy ? "proxy" : "implementation",
-            address(versions)
-        );
-        require(address(versions) != address(0), "CHECK-PV-10");
-
-        // Check that the contract is initialized
-        DeployUtils.assertInitialized({ _contractAddress: address(versions), _isProxy: _isProxy, _slot: 0, _offset: 0 });
-
-        if (_isProxy) {
-            require(versions.owner() == _cfg.finalSystemOwner(), "CHECK-PV-20");
-            require(ProtocolVersion.unwrap(versions.required()) == _cfg.requiredProtocolVersion(), "CHECK-PV-30");
-            require(ProtocolVersion.unwrap(versions.recommended()) == _cfg.recommendedProtocolVersion(), "CHECK-PV-40");
-        } else {
-            require(versions.owner() == address(0), "CHECK-PV-50");
-            require(ProtocolVersion.unwrap(versions.required()) == 0, "CHECK-PV-60");
-            require(ProtocolVersion.unwrap(versions.recommended()) == 0, "CHECK-PV-70");
-        }
     }
 
     /// @notice Asserts that the SuperchainConfig is setup correctly
@@ -400,7 +358,6 @@ library ChainAssertions {
         require(impls.delayedWETHImpl == _impls.DelayedWETH, "CHECK-OPCM-120");
         require(impls.mipsImpl == address(_mips), "CHECK-OPCM-130");
         require(impls.superchainConfigImpl == _impls.SuperchainConfig, "CHECK-OPCM-140");
-        require(impls.protocolVersionsImpl == _impls.ProtocolVersions, "CHECK-OPCM-150");
 
         // Verify that initCode is correctly set into the blueprints
         IOPContractsManagerContainer.Blueprints memory blueprints = _opcm.blueprints();
@@ -435,7 +392,14 @@ library ChainAssertions {
         );
     }
 
-    function checkAnchorStateRegistryProxy(IAnchorStateRegistry _anchorStateRegistryProxy, bool _isProxy) internal {
+    function checkAnchorStateRegistryProxy(
+        IAnchorStateRegistry _anchorStateRegistryProxy,
+        bool _isProxy,
+        GameType _expectedRespectedGameType,
+        Proposal memory _expectedAnchor
+    )
+        internal
+    {
         DeployUtils.assertValidContractAddress(address(_anchorStateRegistryProxy));
         if (_isProxy) {
             DeployUtils.assertERC1967ImplementationSet(address(_anchorStateRegistryProxy));
@@ -449,15 +413,11 @@ library ChainAssertions {
         });
 
         // The below check cannot be done in the standard validator because the assertion only applies at deploy time.
-        (Hash actualRoot,) = _anchorStateRegistryProxy.anchors(GameTypes.PERMISSIONED_CANNON);
-        if (_isProxy) {
-            require(
-                Hash.unwrap(actualRoot) == 0xdead000000000000000000000000000000000000000000000000000000000000,
-                "ANCHORP-40"
-            );
-        } else {
-            require(Hash.unwrap(actualRoot) == bytes32(0), "ANCHORP-40");
-        }
+        Proposal memory actualAnchor = _anchorStateRegistryProxy.getStartingAnchorRoot();
+
+        require(_anchorStateRegistryProxy.respectedGameType().raw() == _expectedRespectedGameType.raw(), "ANCHORP-30");
+        require(actualAnchor.root.raw() == _expectedAnchor.root.raw(), "ANCHORP-40");
+        require(actualAnchor.l2SequenceNumber == _expectedAnchor.l2SequenceNumber, "ANCHORP-50");
     }
 
     /// @notice Asserts that the ZKDisputeGame implementation is setup correctly.
@@ -486,7 +446,6 @@ library ChainAssertions {
             ETHLockbox: address(_output.ethLockboxImpl),
             SystemConfig: address(_output.systemConfigImpl),
             L1ERC721Bridge: address(_output.l1ERC721BridgeImpl),
-            ProtocolVersions: address(_output.protocolVersionsImpl),
             SuperchainConfig: address(_output.superchainConfigImpl)
         });
     }

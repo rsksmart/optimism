@@ -1,6 +1,7 @@
 ---
 title: Transferring ETH
 description: Learn how to transfer ETH across the OP Stack interop cluster
+diataxis: tutorial
 ---
 
 
@@ -16,7 +17,7 @@ description: Learn how to transfer ETH across the OP Stack interop cluster
 
 Crosschain ETH transfers across OP Stack chains are facilitated through the [SuperchainETHBridge](https://github.com/ethereum-optimism/optimism/blob/develop/packages/contracts-bedrock/src/L2/SuperchainETHBridge.sol) contract.
 This tutorial walks through how to send ETH from one chain to another.
-You can do this on [Supersim](/app-developers/tools/supersim) or production once it is released.
+You can do this on [Supersim](/app-developers/tools-sdks/supersim) or production once it is released.
 
 ### What you'll build
 
@@ -61,13 +62,13 @@ The tutorial uses these primary tools:
   </Step>
 
   <Step title="Configure the network">
-  You can run this tutorial either with [Supersim](/app-developers/tools/supersim) running locally, or using the [Interop devnet](/app-developers/guides/building-apps).
+  You can run this tutorial either with [Supersim](/app-developers/tools-sdks/supersim) running locally, or using the [Interop devnet](/app-developers/guides/building-apps).
     Select the correct tab and follow the directions. 
   
   
     <Tabs>
       <Tab title="Supersim">
-        1.  Follow the [Installation Guide](/app-developers/tutorials/development/supersim/installation) to install Supersim for running blockchains with Interop.
+        1.  Follow [Install Supersim](/app-developers/tutorials/development/supersim/installation) to set up Supersim for running blockchains with Interop.
   
         1.  Start Supersim.
   
@@ -89,7 +90,7 @@ The tutorial uses these primary tools:
             DST_URL=http://localhost:9546
             ```
   
-        <Expandable title="Sanity check">
+        <Accordion title="Sanity check">
   
           Get the ETH balances for your address on both the source and destination chains.
   
@@ -98,7 +99,7 @@ The tutorial uses these primary tools:
           cast balance --ether `cast wallet address $PRIVATE_KEY` --rpc-url $DST_URL
           ```
   
-        </Expandable>
+        </Accordion>
   
   
       </Tab>
@@ -126,7 +127,7 @@ The tutorial uses these primary tools:
             DST_URL=https://interop-alpha-1.optimism.io          
             ```      
   
-        <Expandable title="Sanity check">
+        <Accordion title="Sanity check">
   
           Get the ETH balances for your address on both the source and destination chains.
   
@@ -134,7 +135,7 @@ The tutorial uses these primary tools:
           cast balance --ether `cast wallet address $PRIVATE_KEY` --rpc-url $SRC_URL
           cast balance --ether `cast wallet address $PRIVATE_KEY` --rpc-url $DST_URL
           ```
-        </Expandable>
+        </Accordion>
       </Tab>
     </Tabs>
   </Step>
@@ -275,7 +276,7 @@ The tutorial uses these primary tools:
     </Step>
   </Steps>
     
-        <Expandable title="Explanation of `transfer-eth.mts`">
+        <Accordion title="Explanation of `transfer-eth.mts`">
   
         ```typescript
             import { 
@@ -330,7 +331,7 @@ The tutorial uses these primary tools:
         ```
   
   This is how you use `@eth-optimism/viem` to create an executing message.
-  </Expandable>
+  </Accordion>
   </Step>
 
   <Step title="Run the example">

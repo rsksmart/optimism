@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/forge"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/testutil"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
 )
@@ -25,12 +25,9 @@ func TestNewDeploySuperchainScript(t *testing.T) {
 
 		// Then we deploy
 		output, err := deploySuperchain.Run(DeploySuperchainInput{
-			Guardian:                   common.BigToAddress(big.NewInt(1)),
-			SuperchainProxyAdminOwner:  common.BigToAddress(big.NewInt(3)),
-			Paused:                     true,
-			ProtocolVersionsOwner:      common.BigToAddress(big.NewInt(2)),
-			RequiredProtocolVersion:    common.Hash{0x01},
-			RecommendedProtocolVersion: common.Hash{0x01},
+			Guardian:                  common.BigToAddress(big.NewInt(1)),
+			SuperchainProxyAdminOwner: common.BigToAddress(big.NewInt(3)),
+			Paused:                    true,
 		})
 
 		// And do some simple asserts
@@ -45,17 +42,13 @@ func TestNewDeploySuperchainScriptForge(t *testing.T) {
 	embeddedArtifactsFS, err := artifacts.ExtractEmbedded(tmpDir)
 	require.NoError(t, err)
 
-	forgeClient, err := forge.NewStandardClient(fmt.Sprintf("%v", embeddedArtifactsFS))
-	require.NoError(t, err)
+	forgeClient := testutil.NewForgeClient(t, fmt.Sprintf("%v", embeddedArtifactsFS))
 
 	deploySuperchain := NewDeploySuperchainForgeCaller(forgeClient)
 	output, recompiled, err := deploySuperchain(context.Background(), DeploySuperchainInput{
-		Guardian:                   common.BigToAddress(big.NewInt(1)),
-		SuperchainProxyAdminOwner:  common.BigToAddress(big.NewInt(3)),
-		Paused:                     true,
-		ProtocolVersionsOwner:      common.BigToAddress(big.NewInt(2)),
-		RequiredProtocolVersion:    common.Hash{0x01},
-		RecommendedProtocolVersion: common.Hash{0x01},
+		Guardian:                  common.BigToAddress(big.NewInt(1)),
+		SuperchainProxyAdminOwner: common.BigToAddress(big.NewInt(3)),
+		Paused:                    true,
 	})
 
 	require.NoError(t, err)

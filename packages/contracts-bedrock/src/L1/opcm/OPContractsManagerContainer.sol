@@ -23,7 +23,6 @@ contract OPContractsManagerContainer {
     /// @notice Addresses of the implementation contracts.
     struct Implementations {
         address superchainConfigImpl;
-        address protocolVersionsImpl;
         address l1ERC721BridgeImpl;
         address optimismPortalImpl;
         address ethLockboxImpl;
@@ -41,6 +40,7 @@ contract OPContractsManagerContainer {
         address superPermissionedDisputeGameImpl;
         address zkDisputeGameImpl;
         address storageSetterImpl;
+        address sp1PlonkAdapterImpl;
     }
 
     /// @notice Address of the blueprint contracts. This is internal because if it were public the

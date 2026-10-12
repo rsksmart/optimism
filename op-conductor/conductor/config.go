@@ -5,13 +5,13 @@ import (
 	"math"
 	"time"
 
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/urfave/cli/v2"
 
 	"github.com/ethereum-optimism/optimism/op-conductor/flags"
 	opnode "github.com/ethereum-optimism/optimism/op-node"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log/logcli"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
@@ -62,9 +62,6 @@ type Config struct {
 	// ExecutionRPC is the HTTP provider URL for execution layer.
 	ExecutionRPC string
 
-	// SupervisorRPC is the HTTP provider URL for supervisor.
-	SupervisorRPC string
-
 	// RollupBoostEnabled enables the rollup-boost healthcheck (HTTP status codes).
 	// When enabled, healthchecks are performed against ExecutionRPC + "/healthz".
 	// The client internally appends the /healthz path to ExecutionRPC.
@@ -101,7 +98,7 @@ type Config struct {
 	// WebsocketServerPort is the port at which op-conductor exposes its websocket server from which clients can read streams sourced from rollupBoostWsUrl.
 	WebsocketServerPort int
 
-	LogConfig     oplog.CLIConfig
+	LogConfig     logcli.CLIConfig
 	MetricsConfig opmetrics.CLIConfig
 	PprofConfig   oppprof.CLIConfig
 	RPC           oprpc.CLIConfig
@@ -189,7 +186,6 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*Config, error) {
 		RaftLeaderLeaseTimeout:        ctx.Duration(flags.RaftLeaderLeaseTimeout.Name),
 		NodeRPC:                       ctx.String(flags.NodeRPC.Name),
 		ExecutionRPC:                  ctx.String(flags.ExecutionRPC.Name),
-		SupervisorRPC:                 ctx.String(flags.SupervisorRPC.Name),
 		RollupBoostEnabled:            ctx.Bool(flags.RollupBoostEnabled.Name),
 		RollupBoostHealthcheckTimeout: ctx.Duration(flags.RollupBoostHealthcheckTimeout.Name),
 		RollupBoostNextEnabled:        ctx.Bool(flags.RollupBoostNextEnabled.Name),
@@ -212,7 +208,7 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*Config, error) {
 		RPCEnableProxy:      ctx.Bool(flags.RPCEnableProxy.Name),
 		RollupBoostWsURL:    ctx.String(flags.RollupBoostWsURL.Name),
 		WebsocketServerPort: ctx.Int(flags.WebsocketServerPort.Name),
-		LogConfig:           oplog.ReadCLIConfig(ctx),
+		LogConfig:           logcli.ReadCLIConfig(ctx),
 		MetricsConfig:       opmetrics.ReadCLIConfig(ctx),
 		PprofConfig:         oppprof.ReadCLIConfig(ctx),
 		RPC:                 oprpc.ReadCLIConfig(ctx),

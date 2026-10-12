@@ -323,11 +323,6 @@
           },
           {
             "internalType": "address",
-            "name": "protocolVersionsImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
             "name": "l1ERC721BridgeImpl",
             "type": "address"
           },
@@ -410,6 +405,11 @@
             "internalType": "address",
             "name": "storageSetterImpl",
             "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "sp1PlonkAdapterImpl",
+            "type": "address"
           }
         ],
         "internalType": "struct IOPContractsManagerContainer.Implementations",
@@ -429,6 +429,25 @@
       }
     ],
     "name": "isDevFeatureEnabled",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "contract ISystemConfig",
+        "name": "_systemConfig",
+        "type": "address"
+      }
+    ],
+    "name": "isPermittedMigrateSequence",
     "outputs": [
       {
         "internalType": "bool",
@@ -865,6 +884,17 @@
   {
     "inputs": [],
     "name": "OPContractsManagerV2_SuperchainConfigNeedsUpgrade",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "GameType",
+        "name": "_gameType",
+        "type": "uint32"
+      }
+    ],
+    "name": "OPContractsManagerV2_ZeroGameImplementation",
     "type": "error"
   },
   {

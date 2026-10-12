@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -74,6 +75,22 @@ type L1DevGenesisParams struct {
 	// BPO2TimeOffset configures the BPO2 fork to be activated at the given time after L1 dev
 	// genesis time.
 	BPO2TimeOffset *uint64 `json:"bpo2TimeOffset" toml:"bpo2TimeOffset"`
+
+	// BPO3TimeOffset configures the BPO3 fork to be activated at the given time after L1 dev
+	// genesis time.
+	BPO3TimeOffset *uint64 `json:"bpo3TimeOffset" toml:"bpo3TimeOffset"`
+
+	// BPO4TimeOffset configures the BPO4 fork to be activated at the given time after L1 dev
+	// genesis time.
+	BPO4TimeOffset *uint64 `json:"bpo4TimeOffset" toml:"bpo4TimeOffset"`
+
+	// BPO5TimeOffset configures the BPO5 fork to be activated at the given time after L1 dev
+	// genesis time.
+	BPO5TimeOffset *uint64 `json:"bpo5TimeOffset" toml:"bpo5TimeOffset"`
+
+	// AmsterdamTimeOffset configures Amsterdam (the EL changes in the Glamsterdam Ethereum
+	// fork) to be activated at the given time after L1 dev genesis time.
+	AmsterdamTimeOffset *uint64 `json:"amsterdamTimeOffset" toml:"amsterdamTimeOffset"`
 
 	BlobSchedule *params.BlobScheduleConfig `json:"blobSchedule"`
 
@@ -276,6 +293,19 @@ func (c *Intent) Chain(id common.Hash) (*ChainIntent, error) {
 
 func (c *Intent) WriteToFile(path string) error {
 	return jsonutil.WriteTOML(c, ioutil.ToAtomicFile(path, 0o755))
+}
+
+// Clone returns a deep copy of the intent, detached from the receiver's pointers.
+func (c *Intent) Clone() (*Intent, error) {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode intent: %w", err)
+	}
+	var clone Intent
+	if err := json.Unmarshal(data, &clone); err != nil {
+		return nil, fmt.Errorf("failed to decode intent: %w", err)
+	}
+	return &clone, nil
 }
 
 func (c *Intent) checkL1Prod() error {

@@ -48,8 +48,6 @@ Available components:
   - `L2Proposer`: op-proposer, or equivalent
   - `L2Challenger`: op-challenger, or equivalent
   - `L2MetricsDashboard`: runs prometheus and grafana instances if any component registers metrics endpoints
-- `Supervisor`: op-supervisor service, or equivalent
-- `Faucet`: util to fund eth to test accounts
 
 ### DSL-only components
 
@@ -61,7 +59,8 @@ Available components:
 - `HDWallet`: a source to create new `Key`s from.
 - `EOA`: an Externally-Owned-Account (EOA) is a private-key backed ethereum account, specific to a single chain.
   This is a `Key` coupled to an `ELNode` (L1 or L2).
-- `Funder`: a wallet combined with a faucet and EL node, to create pre-funded `EOA`s
+- `SyncEOA`: combines a transaction plan with a `txinclude.Includer` to submit transactions and wait for inclusion. Nonce and concurrency guarantees come from the supplied includer.
+- `FunderEOA`: a genesis-prefunded `EOA` combined with an `HDWallet`, used to create and fund test `EOA`s. Funding transactions use a `SyncEOA` so they can be issued concurrently with managed nonces.
 
 #### `presets`, `Option`, `TestSetup`
 
@@ -102,19 +101,26 @@ and returns a typed output that the test then may use.
 
 - `DEVSTACK_KEYS_SALT`: Seeds the keys generated with `NewHDWallet`. This is useful for "isolating" test runs, and might be needed to reproduce CI and/or acceptance test runs. It can be any string, including the empty one to use the "usual" devkeys.
 - `DEVNET_EXPECT_PRECONDITIONS_MET`: This can be set of force test failures when their pre-conditions are not met, which would otherwise result in them being skipped. This is helpful in particular for runs that do intend to run specific tests (as opposed to whatever is available). `op-acceptor` does set that variable, for example.
+- `DEVSTACK_L1_FORK=fusaka` selects the L1 fork active at genesis. Ethereum upgrade
+  names (`pectra`, `fusaka`, `glamsterdam`) and geth execution-fork names
+  (`prague`, `osaka`, `amsterdam`) are accepted. BPO selectors are not accepted until the
+  bundled op-geth supports `engine_newPayloadV4` at those forks. Amsterdam inherits BPO4
+  blob parameters until upstream defaults are available. If unset, Prague remains the
+  devstack default.
+- `DEVSTACK_MONOREPO_ROOT`: Absolute path to a monorepo checkout. Used by out-of-tree acceptance suites (which depend on this module by git rev) so contract-artifact resolution can find `packages/contracts-bedrock` outside the cwd-relative walk. In-tree runs don't need it.
 
 ### Rust stack env vars:
 - `DEVSTACK_L2CL_KIND=kona-node` to select kona-node as default L2 CL node
 - `DEVSTACK_L2EL_KIND=op-reth` to select op-reth as default L2 EL node
-- `KONA_NODE_EXEC_PATH=/home/USERHERE/projects/kona/target/debug/kona-node` to select the kona-node executable to run
-- `OP_RETH_EXEC_PATH=/home/USERHERE/projects/reth/target/release/op-reth` to select the op-reth executable to run
+- `RUST_BINARY_PATH_KONA_NODE=/home/USERHERE/projects/kona/target/debug/kona-node` to select the kona-node executable to run (skips the build; the path must exist)
+- `RUST_BINARY_PATH_OP_RETH=/home/USERHERE/projects/reth/target/release/op-reth` to select the op-reth executable to run (skips the build; the path must exist)
 
 ### Go stack env vars:
 - `DEVSTACK_L1EL_KIND=geth` to select geth as default L1 EL node
 - `SYSGO_GETH_EXEC_PATH=/path/to/geth` to select the geth executable to run
 
 ### Metrics env vars:
-- `SYSGO_METRICS_ENABLED` set to `true` to enable metrics to be exposed via prometheus and grafana for all running components that expose metrics (default: `false`)
+- `SYSGO_METRICS_ENABLED` set to `true` to expose Prometheus and Grafana metrics for supported running components; sysgo does not enable Kona metrics (default: `false`)
 - `SYSGO_DOCKER_EXEC_PATH` path to docker executable (defaults to `docker` assuming it is in your `PATH`)
 - `SYSGO_GRAFANA_PROVISIONING_DIR` to provide a local grafana provisioning dir to use (otherwise a temp dir will be created and removed at the end of tests)
 - `SYSGO_GRAFANA_DATA_DIR` to provide a local grafana data dir to use (otherwise a temp dir will be created and removed at the end of tests)

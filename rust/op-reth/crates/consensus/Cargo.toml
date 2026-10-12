@@ -26,6 +26,12 @@ reth-trie-common.workspace = true
 reth-optimism-forks.workspace = true
 reth-optimism-primitives.workspace = true
 
+# op-alloy
+op-alloy-consensus.workspace = true
+
+# metrics
+reth-metrics = { workspace = true, optional = true }
+
 # ethereum
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
@@ -39,6 +45,7 @@ thiserror.workspace = true
 reth-optimism-chainspec.workspace = true
 
 [dev-dependencies]
+reth-optimism-chainspec = { workspace = true, features = ["superchain-configs"] }
 reth-provider = { workspace = true, features = ["test-utils"] }
 reth-db-common.workspace = true
 reth-revm.workspace = true
@@ -46,12 +53,14 @@ reth-trie.workspace = true
 reth-optimism-node.workspace = true
 
 alloy-chains.workspace = true
-
-op-alloy-consensus.workspace = true
+metrics-exporter-prometheus.workspace = true
+metrics-util.workspace = true
+rstest.workspace = true
 
 [features]
 default = ["std"]
 std = [
+    "dep:reth-metrics",
     "reth-chainspec/std",
     "reth-consensus/std",
     "reth-consensus-common/std",

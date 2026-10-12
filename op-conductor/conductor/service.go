@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/hashicorp/raft"
 
@@ -28,6 +27,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/httputil"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/retry"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
@@ -245,14 +245,6 @@ func (c *OpConductor) initHealthMonitor(ctx context.Context) error {
 
 	p2p := sources.NewP2PClient(nc)
 
-	var supervisor health.SupervisorHealthAPI
-	if c.cfg.SupervisorRPC != "" {
-		supervisor, err = dial.DialSupervisorClientWithTimeout(ctx, c.log, c.cfg.SupervisorRPC)
-		if err != nil {
-			return fmt.Errorf("failed to dial supervisor: %w", err)
-		}
-	}
-
 	c.hmon = health.NewSequencerHealthMonitor(
 		c.log,
 		c.metrics,
@@ -264,7 +256,6 @@ func (c *OpConductor) initHealthMonitor(ctx context.Context) error {
 		&c.cfg.RollupCfg,
 		node,
 		p2p,
-		supervisor,
 		rollupBoostHealthChecker,
 		elP2p,
 		c.cfg.HealthCheck.ExecutionP2pMinPeerCount,
@@ -282,7 +273,6 @@ func (oc *OpConductor) initRPCServer(ctx context.Context) error {
 		oc.cfg.RPC.ListenPort,
 		oc.version,
 		oprpc.WithLogger(oc.log),
-		oprpc.WithRPCRecorder(oc.metrics.NewRecorder("main")),
 	)
 	api := conductorrpc.NewAPIBackend(oc.log, oc)
 	server.AddAPI(rpc.API{

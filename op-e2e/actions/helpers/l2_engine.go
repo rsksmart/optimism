@@ -2,9 +2,10 @@ package helpers
 
 import (
 	"errors"
+	"os"
 
+	"github.com/ethereum-optimism/optimism/op-e2e/actions/helpers/engineapi"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
-	"github.com/ethereum-optimism/optimism/op-program/client/l2/engineapi"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/stretchr/testify/require"
 
@@ -17,7 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
@@ -80,6 +81,10 @@ func newBackend(t e2eutils.TestingBase, genesis *core.Genesis, jwtPath string, o
 		Genesis:     genesis,
 		StateScheme: rawdb.HashScheme,
 		NoPruning:   true,
+		// Record trie-key preimages when generating pre-fork state artifacts, so
+		// the post-activation state can be enumerated and dumped. Off otherwise to
+		// avoid the recording overhead in normal test runs.
+		Preimages: os.Getenv("OP_E2E_GEN_PREFORK_STATE") != "",
 	}
 	nodeCfg := &node.Config{
 		Name:        "l2-geth",

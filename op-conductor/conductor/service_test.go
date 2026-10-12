@@ -15,7 +15,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-conductor/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
@@ -946,38 +946,6 @@ func (s *OpConductorTestSuite) TestRollupBoostConnectionDown() {
 
 func TestControlLoop(t *testing.T) {
 	suite.Run(t, new(OpConductorTestSuite))
-}
-
-// TestSupervisorConnectionDown tests that OpConductor correctly handles supervisor connection failures
-func (s *OpConductorTestSuite) TestSupervisorConnectionDown() {
-	s.enableSynchronization()
-
-	// set initial state as a leader that is healthy and sequencing
-	s.conductor.leader.Store(true)
-	s.conductor.healthy.Store(true)
-	s.conductor.seqActive.Store(true)
-	s.conductor.prevState = &state{
-		leader:  true,
-		healthy: true,
-		active:  true,
-	}
-
-	// Setup expectations - leader with supervisor connection down should stop sequencing and transfer leadership
-	s.ctrl.EXPECT().StopSequencer(mock.Anything).Return(common.Hash{}, nil).Times(1)
-	s.cons.EXPECT().TransferLeader().Return(nil).Times(1)
-
-	// Simulate a supervisor connection failure
-	s.updateHealthStatusAndExecuteAction(health.ErrSupervisorConnectionDown)
-
-	// Verify the OpConductor transitions to follower state and stops sequencing
-	s.False(s.conductor.leader.Load(), "Should transition to follower")
-	s.False(s.conductor.healthy.Load(), "Should be marked as unhealthy")
-	s.False(s.conductor.seqActive.Load(), "Sequencer should be stopped")
-	s.Equal(health.ErrSupervisorConnectionDown, s.conductor.hcerr, "Error should be stored")
-
-	// Verify method calls
-	s.ctrl.AssertNumberOfCalls(s.T(), "StopSequencer", 1)
-	s.cons.AssertNumberOfCalls(s.T(), "TransferLeader", 1)
 }
 
 // TestFlashblocksHandlerIntegration tests that the flashblocks handler is properly initialized and started

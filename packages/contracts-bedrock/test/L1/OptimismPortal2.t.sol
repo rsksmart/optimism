@@ -31,6 +31,7 @@ import { IOptimismPortal2 as IOptimismPortal } from "interfaces/L1/IOptimismPort
 import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
 
 import { IProxy } from "interfaces/universal/IProxy.sol";
+import { Proxy } from "src/universal/Proxy.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
@@ -683,10 +684,15 @@ contract OptimismPortal2_DonateETH_Test is OptimismPortal2_TestInit {
 /// @title OptimismPortal2_MigrateLiquidity_Test
 /// @notice Test contract for OptimismPortal2 `migrateLiquidity` function.
 contract OptimismPortal2_MigrateLiquidity_Test is OptimismPortal2_TestInit {
-    function setUp() public virtual override {
-        super.setUp();
-        skipIfDevFeatureDisabled(DevFeatures.OPTIMISM_PORTAL_INTEROP);
-        forceEnableInterop();
+    /// @notice Tests that liquidity migration requires a configured lockbox.
+    function test_migrateLiquidity_noLockbox_reverts() external {
+        StorageSlot memory slot = ForgeArtifacts.getSlot("OptimismPortal2", "ethLockbox");
+        vm.store(address(optimismPortal2), bytes32(slot.slot), bytes32(0));
+        address proxyAdminOwner = optimismPortal2.proxyAdminOwner();
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_NotUsingLockbox.selector);
+        vm.prank(proxyAdminOwner);
+        optimismPortal2.migrateLiquidity();
     }
 
     /// @notice Tests the liquidity migration from the portal to the lockbox reverts if not called
@@ -700,6 +706,7 @@ contract OptimismPortal2_MigrateLiquidity_Test is OptimismPortal2_TestInit {
 
     /// @notice Tests that the liquidity migration from the portal to the lockbox succeeds.
     function test_migrateLiquidity_succeeds(uint256 _portalBalance) external {
+        skipIfSysFeatureEnabled(Features.CUSTOM_GAS_TOKEN);
         _portalBalance = uint256(bound(_portalBalance, 0, type(uint256).max - address(ethLockbox).balance));
         vm.deal(address(optimismPortal2), _portalBalance);
 
@@ -717,6 +724,23 @@ contract OptimismPortal2_MigrateLiquidity_Test is OptimismPortal2_TestInit {
         assertEq(address(optimismPortal2).balance, 0);
         assertEq(address(ethLockbox).balance, lockboxBalanceBefore + _portalBalance);
     }
+
+    /// @notice Tests that the ProxyAdmin owner cannot migrate ETH on a custom gas token chain.
+    function test_migrateLiquidity_customGasToken_reverts() external {
+        skipIfSysFeatureDisabled(Features.CUSTOM_GAS_TOKEN);
+        assertTrue(systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
+        assertTrue(ethLockbox.authorizedPortals(optimismPortal2));
+        vm.deal(address(optimismPortal2), 1 ether);
+        uint256 lockboxBalanceBefore = address(ethLockbox).balance;
+        address proxyAdminOwner = optimismPortal2.proxyAdminOwner();
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_NotAllowedOnCGTMode.selector);
+        vm.prank(proxyAdminOwner);
+        optimismPortal2.migrateLiquidity();
+
+        assertEq(address(optimismPortal2).balance, 1 ether);
+        assertEq(address(ethLockbox).balance, lockboxBalanceBefore);
+    }
 }
 
 /// @title OptimismPortal2_migrateToSharedDisputeGame_Test
@@ -726,6 +750,51 @@ contract OptimismPortal2_migrateToSharedDisputeGame_Test is OptimismPortal2_Test
         super.setUp();
         skipIfDevFeatureDisabled(DevFeatures.OPTIMISM_PORTAL_INTEROP);
         forceEnableInterop();
+    }
+
+    /// @notice Deploys a fresh ETHLockbox proxy pointed at the same implementation as the existing
+    ///         `ethLockbox` and initializes it with `optimismPortal2` optionally authorized.
+    function _deployLockbox(bool _authorizePortal) internal returns (IETHLockbox lockbox_) {
+        address proxyAdminAddr = address(proxyAdmin);
+
+        vm.prank(proxyAdminAddr);
+        address impl = Proxy(payable(address(ethLockbox))).implementation();
+
+        address newProxy = address(new Proxy(proxyAdminAddr));
+        IOptimismPortal[] memory portals = new IOptimismPortal[](_authorizePortal ? 1 : 0);
+        if (_authorizePortal) portals[0] = IOptimismPortal(payable(address(optimismPortal2)));
+
+        vm.prank(proxyAdminAddr);
+        Proxy(payable(newProxy)).upgradeToAndCall(
+            impl, abi.encodeCall(IETHLockbox.initialize, (superchainConfig, portals))
+        );
+
+        lockbox_ = IETHLockbox(payable(newProxy));
+    }
+
+    /// @notice Deploys a fresh AnchorStateRegistry proxy pointed at the same implementation as the
+    ///         existing `anchorStateRegistry` and initializes it with a dummy anchor root.
+    /// @param _ethLockbox The destination lockbox used to resolve the registry's pause state.
+    function _deployAnchorStateRegistry(IETHLockbox _ethLockbox) internal returns (IAnchorStateRegistry registry_) {
+        address proxyAdminAddr = address(proxyAdmin);
+
+        vm.prank(proxyAdminAddr);
+        address impl = Proxy(payable(address(anchorStateRegistry))).implementation();
+
+        address newProxy = address(new Proxy(proxyAdminAddr));
+        Proposal memory startingAnchorRoot =
+            Proposal({ root: Hash.wrap(keccak256("starting-anchor-root")), l2SequenceNumber: 1 });
+
+        vm.prank(proxyAdminAddr);
+        Proxy(payable(newProxy)).upgradeToAndCall(
+            impl,
+            abi.encodeCall(
+                IAnchorStateRegistry.initialize,
+                (_ethLockbox, disputeGameFactory, startingAnchorRoot, GameTypes.SUPER_PERMISSIONED)
+            )
+        );
+
+        registry_ = IAnchorStateRegistry(newProxy);
     }
 
     /// @notice Tests that `migrateToSharedDisputeGame` reverts if the caller is not the proxy admin
@@ -756,32 +825,72 @@ contract OptimismPortal2_migrateToSharedDisputeGame_Test is OptimismPortal2_Test
         optimismPortal2.migrateToSharedDisputeGame(IETHLockbox(_newLockbox), newAnchorStateRegistry);
     }
 
-    /// @notice Tests that `migrateToSharedDisputeGame` updates the ETHLockbox contract, updates the
-    ///         AnchorStateRegistry, and sets the superRootsActive flag to true.
-    /// @param _newLockbox The new ETHLockbox to migrate to.
-    /// @param _newAnchorStateRegistry The new AnchorStateRegistry to migrate to.
-    function testFuzz_migrateToSharedDisputeGame_succeeds(
-        address _newLockbox,
-        address _newAnchorStateRegistry
-    )
-        external
-    {
+    /// @notice Tests that `migrateToSharedDisputeGame` reverts when the new lockbox is the zero
+    ///         address.
+    function test_migrateToSharedDisputeGame_zeroLockbox_reverts() external {
+        address caller = optimismPortal2.proxyAdminOwner();
+        IAnchorStateRegistry registry = _deployAnchorStateRegistry(ethLockbox);
+        vm.expectRevert(IOptimismPortal.OptimismPortal_ZeroAddress.selector);
+        vm.prank(caller);
+        optimismPortal2.migrateToSharedDisputeGame(IETHLockbox(address(0)), registry);
+    }
+
+    /// @notice Tests that `migrateToSharedDisputeGame` reverts when the new registry is the zero
+    ///         address.
+    function test_migrateToSharedDisputeGame_zeroRegistry_reverts() external {
+        address caller = optimismPortal2.proxyAdminOwner();
+        IETHLockbox lockbox = _deployLockbox({ _authorizePortal: true });
+        vm.expectRevert(IOptimismPortal.OptimismPortal_ZeroAddress.selector);
+        vm.prank(caller);
+        optimismPortal2.migrateToSharedDisputeGame(lockbox, IAnchorStateRegistry(address(0)));
+    }
+
+    /// @notice Tests that `migrateToSharedDisputeGame` reverts when the new lockbox has not
+    ///         authorized this portal.
+    function test_migrateToSharedDisputeGame_lockboxNotAuthorizingPortal_reverts() external {
+        address caller = optimismPortal2.proxyAdminOwner();
+        IETHLockbox lockbox = _deployLockbox({ _authorizePortal: false });
+        IAnchorStateRegistry registry = _deployAnchorStateRegistry(lockbox);
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_LockboxNotAuthorizedForPortal.selector);
+        vm.prank(caller);
+        optimismPortal2.migrateToSharedDisputeGame(lockbox, registry);
+    }
+
+    /// @notice Tests that `migrateToSharedDisputeGame` updates the ETHLockbox and
+    ///         AnchorStateRegistry references on the portal when given real, freshly-deployed and
+    ///         initialized lockbox + registry proxies (mirroring the OPCM migrator setup).
+    function test_migrateToSharedDisputeGame_succeeds() external {
         address oldLockbox = address(optimismPortal2.ethLockbox());
         address oldAnchorStateRegistry = address(optimismPortal2.anchorStateRegistry());
-        vm.assume(_newLockbox != oldLockbox);
-        vm.assume(_newAnchorStateRegistry != oldAnchorStateRegistry);
 
-        vm.expectEmit(address(optimismPortal2));
-        emit PortalMigrated(oldLockbox, _newLockbox, oldAnchorStateRegistry, _newAnchorStateRegistry);
-
-        vm.prank(optimismPortal2.proxyAdminOwner());
-        optimismPortal2.migrateToSharedDisputeGame(
-            IETHLockbox(_newLockbox), IAnchorStateRegistry(_newAnchorStateRegistry)
+        IETHLockbox newLockbox = _deployLockbox({ _authorizePortal: true });
+        IAnchorStateRegistry newAnchorStateRegistry = _deployAnchorStateRegistry(newLockbox);
+        assertTrue(
+            newLockbox.authorizedPortals(IOptimismPortal(payable(address(optimismPortal2)))),
+            "test setup: portal not authorized on new lockbox"
         );
 
-        assertEq(address(optimismPortal2.ethLockbox()), _newLockbox);
-        assertEq(address(optimismPortal2.anchorStateRegistry()), _newAnchorStateRegistry);
+        vm.expectEmit(address(optimismPortal2));
+        emit PortalMigrated(oldLockbox, address(newLockbox), oldAnchorStateRegistry, address(newAnchorStateRegistry));
+
+        vm.prank(optimismPortal2.proxyAdminOwner());
+        optimismPortal2.migrateToSharedDisputeGame(newLockbox, newAnchorStateRegistry);
+
+        assertEq(address(optimismPortal2.ethLockbox()), address(newLockbox));
+        assertEq(address(optimismPortal2.anchorStateRegistry()), address(newAnchorStateRegistry));
+        assertEq(address(newAnchorStateRegistry.ethLockbox()), address(newLockbox));
         assertTrue(systemConfig.isFeatureEnabled(Features.INTEROP));
+
+        vm.prank(superchainConfig.guardian());
+        superchainConfig.pause(oldLockbox);
+        assertFalse(optimismPortal2.paused());
+        assertFalse(newAnchorStateRegistry.paused());
+
+        vm.prank(superchainConfig.guardian());
+        superchainConfig.pause(address(newLockbox));
+        assertTrue(optimismPortal2.paused());
+        assertTrue(newAnchorStateRegistry.paused());
     }
 
     /// @notice Tests that `migrateToSharedDisputeGame` reverts when the system is paused.
@@ -1028,19 +1137,8 @@ contract OptimismPortal2_ProveWithdrawalTransaction_Test is OptimismPortal2_Test
             _withdrawalProof: _withdrawalProof
         });
 
-        // Create a new game.
-        IDisputeGame newGame = disputeGameFactory.create{
-            value: disputeGameFactory.initBonds(optimismPortal2.respectedGameType())
-        }(GameType.wrap(0), Claim.wrap(_outputRoot), abi.encode(_proposedBlockNumber + 1));
-
-        // In super mode, the new game's type differs from the respected type, so mock this.
-        if (DisputeGames.isSuperGame(respectedGameType)) {
-            vm.mockCall(
-                address(newGame),
-                abi.encodeCall(IFaultDisputeGame.wasRespectedGameTypeWhenCreated, ()),
-                abi.encode(true)
-            );
-        }
+        // Create a new game with the current respected type.
+        IDisputeGame newGame = _createDisputeGame(respectedGameType, _outputRoot, _proposedBlockNumber + 1);
 
         // Update the respected game type to 0xbeef.
         vm.prank(optimismPortal2.guardian());
@@ -1563,11 +1661,8 @@ contract OptimismPortal2_FinalizeWithdrawalTransaction_Test is OptimismPortal2_T
     /// @notice Tests that `finalizeWithdrawalTransaction` reverts if the target reverts when
     ///         using the ETHLockbox.
     function test_finalizeWithdrawalTransaction_lockboxAndTargetFails_fails() external {
-        // Enable the ETHLockbox.
-        address dummyLockbox = address(0xdeadbeef);
-        forceEnableLockbox(dummyLockbox);
-        vm.deal(address(dummyLockbox), 0xFFFFFFFF);
-        vm.deal(address(optimismPortal2), _defaultTx.value);
+        vm.deal(address(ethLockbox), 0xFFFFFFFF);
+        vm.deal(address(optimismPortal2), 0);
 
         uint256 bobBalanceBefore = address(bob).balance;
         vm.etch(bob, hex"fe"); // Contract with just the invalid opcode.
@@ -2299,6 +2394,166 @@ contract OptimismPortal2_CheckWithdrawal_Test is OptimismPortal2_TestInit {
         // Should revert.
         vm.expectRevert(IOptimismPortal.OptimismPortal_InvalidRootClaim.selector);
         optimismPortal2.checkWithdrawal(_withdrawalHash, address(this));
+    }
+}
+
+/// @title OptimismPortal2_DeleteProvenWithdrawal_Test
+/// @notice Test contract for OptimismPortal2 `deleteProvenWithdrawal` function.
+contract OptimismPortal2_DeleteProvenWithdrawal_Test is OptimismPortal2_TestInit {
+    function setUp() public virtual override {
+        super.setUp();
+        optimismPortal2.proveWithdrawalTransaction({
+            _tx: _defaultTx,
+            _disputeGameIndex: _proposedGameIndex,
+            _outputRootProof: _outputRootProof,
+            _withdrawalProof: _withdrawalProof
+        });
+    }
+
+    /// @notice Tests that `deleteProvenWithdrawal` succeeds when the dispute game resolved in
+    ///         favor of the challenger.
+    function test_deleteProvenWithdrawal_challengerWins_succeeds() external {
+        vm.mockCall(address(game), abi.encodeCall(game.status, ()), abi.encode(GameStatus.CHALLENGER_WINS));
+
+        vm.expectEmit(true, true, true, true);
+        emit WithdrawalProofDeleted(_withdrawalHash, address(this));
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+
+        (IDisputeGame disputeGameProxy, uint64 timestamp) =
+            optimismPortal2.provenWithdrawals(_withdrawalHash, address(this));
+        assertEq(address(disputeGameProxy), address(0));
+        assertEq(timestamp, 0);
+    }
+
+    /// @notice Tests that `deleteProvenWithdrawal` succeeds when the dispute game is blacklisted.
+    function test_deleteProvenWithdrawal_blacklistedGame_succeeds() external {
+        vm.prank(optimismPortal2.guardian());
+        anchorStateRegistry.blacklistDisputeGame(IDisputeGame(address(game)));
+
+        vm.expectEmit(true, true, true, true);
+        emit WithdrawalProofDeleted(_withdrawalHash, address(this));
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+
+        (, uint64 timestamp) = optimismPortal2.provenWithdrawals(_withdrawalHash, address(this));
+        assertEq(timestamp, 0);
+    }
+
+    /// @notice Tests that `deleteProvenWithdrawal` can be called by any address.
+    function testFuzz_deleteProvenWithdrawal_anyCaller_succeeds(address _caller) external {
+        assumeNotForgeAddress(_caller);
+        vm.assume(_caller != EIP1967Helper.getAdmin(address(optimismPortal2)));
+        vm.mockCall(address(game), abi.encodeCall(game.status, ()), abi.encode(GameStatus.CHALLENGER_WINS));
+
+        vm.prank(_caller);
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+
+        (, uint64 timestamp) = optimismPortal2.provenWithdrawals(_withdrawalHash, address(this));
+        assertEq(timestamp, 0);
+    }
+
+    /// @notice Tests that `deleteProvenWithdrawal` reverts if the withdrawal has not been proven
+    ///         by the given proof submitter.
+    function test_deleteProvenWithdrawal_ifUnproven_reverts() external {
+        vm.expectRevert(IOptimismPortal.OptimismPortal_Unproven.selector);
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(0xb0b));
+    }
+
+    /// @notice Tests that `deleteProvenWithdrawal` reverts if the dispute game is still in
+    ///         progress.
+    function test_deleteProvenWithdrawal_ifGameInProgress_reverts() external {
+        vm.expectRevert(IOptimismPortal.OptimismPortal_DisputeGameNotInvalidated.selector);
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+    }
+
+    /// @notice Tests that `deleteProvenWithdrawal` reverts if the dispute game resolved in favor
+    ///         of the defender.
+    function test_deleteProvenWithdrawal_ifDefenderWins_reverts() external {
+        game.resolveClaim(0, 0);
+        game.resolve();
+        assertEq(uint256(game.status()), uint256(GameStatus.DEFENDER_WINS));
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_DisputeGameNotInvalidated.selector);
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+    }
+
+    /// @notice Tests that a deleted withdrawal proof can no longer be used to finalize.
+    function test_deleteProvenWithdrawal_thenFinalize_reverts() external {
+        vm.mockCall(address(game), abi.encodeCall(game.status, ()), abi.encode(GameStatus.CHALLENGER_WINS));
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+
+        vm.warp(block.timestamp + optimismPortal2.proofMaturityDelaySeconds() + 1);
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_Unproven.selector);
+        optimismPortal2.checkWithdrawal(_withdrawalHash, address(this));
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_Unproven.selector);
+        optimismPortal2.finalizeWithdrawalTransactionExternalProof(_defaultTx, address(this));
+    }
+
+    /// @notice Tests that a withdrawal cannot be re-proven against the same game after the proof
+    ///         was deleted because the game resolved in favor of the challenger. Deletion is only
+    ///         safe to make permissionless because `proveWithdrawalTransaction` rejects that game.
+    function test_deleteProvenWithdrawal_thenReproveChallengerWinsGame_reverts() external {
+        _resolveGameAgainstDefender();
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_InvalidDisputeGame.selector);
+        optimismPortal2.proveWithdrawalTransaction({
+            _tx: _defaultTx,
+            _disputeGameIndex: _proposedGameIndex,
+            _outputRootProof: _outputRootProof,
+            _withdrawalProof: _withdrawalProof
+        });
+
+        (, uint64 timestamp) = optimismPortal2.provenWithdrawals(_withdrawalHash, address(this));
+        assertEq(timestamp, 0);
+    }
+
+    /// @notice Tests that a withdrawal cannot be re-proven against the same game after the proof
+    ///         was deleted because the game was blacklisted. Deletion is only safe to make
+    ///         permissionless because `proveWithdrawalTransaction` rejects that game.
+    function test_deleteProvenWithdrawal_thenReproveBlacklistedGame_reverts() external {
+        vm.prank(optimismPortal2.guardian());
+        anchorStateRegistry.blacklistDisputeGame(IDisputeGame(address(game)));
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+
+        vm.expectRevert(IOptimismPortal.OptimismPortal_ImproperDisputeGame.selector);
+        optimismPortal2.proveWithdrawalTransaction({
+            _tx: _defaultTx,
+            _disputeGameIndex: _proposedGameIndex,
+            _outputRootProof: _outputRootProof,
+            _withdrawalProof: _withdrawalProof
+        });
+
+        (, uint64 timestamp) = optimismPortal2.provenWithdrawals(_withdrawalHash, address(this));
+        assertEq(timestamp, 0);
+    }
+
+    /// @notice Stores a CHALLENGER_WINS status in the dispute game. The status lives in slot 0 at
+    ///         offset 16. A real stored status is used instead of `vm.mockCall` so that a revert
+    ///         on re-prove cannot be an artefact of the mock.
+    function _resolveGameAgainstDefender() internal {
+        uint256 offset = 16 << 3;
+        uint256 slot = uint256(vm.load(address(game), bytes32(0)));
+        slot = (slot & ~(0xFF << offset)) | (uint256(GameStatus.CHALLENGER_WINS) << offset);
+        vm.store(address(game), bytes32(0), bytes32(slot));
+
+        assertEq(uint256(game.status()), uint256(GameStatus.CHALLENGER_WINS));
+    }
+
+    /// @notice Tests that `deleteProvenWithdrawal` does not clear the replay protection applied to
+    ///         a finalized withdrawal.
+    function test_deleteProvenWithdrawal_finalizedWithdrawal_succeeds() external {
+        game.resolveClaim(0, 0);
+        game.resolve();
+        vm.warp(block.timestamp + optimismPortal2.proofMaturityDelaySeconds() + 1);
+        optimismPortal2.finalizeWithdrawalTransaction(_defaultTx);
+
+        vm.prank(optimismPortal2.guardian());
+        anchorStateRegistry.blacklistDisputeGame(IDisputeGame(address(game)));
+        optimismPortal2.deleteProvenWithdrawal(_withdrawalHash, address(this));
+
+        assertTrue(optimismPortal2.finalizedWithdrawals(_withdrawalHash));
     }
 }
 

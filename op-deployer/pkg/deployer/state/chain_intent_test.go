@@ -1,7 +1,10 @@
 package state
 
 import (
+	"math"
 	"math/big"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -32,8 +35,15 @@ func validBaseChainIntent() *ChainIntent {
 	}
 }
 
+func TestFaultGameAbsolutePrestateOverrideKeyMatchesJSONTag(t *testing.T) {
+	field, ok := reflect.TypeFor[ChainProofParams]().FieldByName("DisputeAbsolutePrestate")
+	require.True(t, ok)
+
+	jsonName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+	require.Equal(t, FaultGameAbsolutePrestateOverrideKey, jsonName)
+}
+
 func TestChainIntentCheck_ZKDisputeGame(t *testing.T) {
-	verifier := common.HexToAddress("0xabc")
 	prestate := common.HexToHash("0xdef")
 
 	tests := []struct {
@@ -46,7 +56,6 @@ func TestChainIntentCheck_ZKDisputeGame(t *testing.T) {
 			game: AdditionalDisputeGame{
 				VMType: VMTypeZK,
 				ZKDisputeGame: &ZKDisputeGameParams{
-					Verifier:             verifier,
 					AbsolutePrestate:     prestate,
 					MaxChallengeDuration: 3600,
 					MaxProveDuration:     7200,
@@ -64,22 +73,10 @@ func TestChainIntentCheck_ZKDisputeGame(t *testing.T) {
 			expectErr: ErrZKDisputeGameMissingParams,
 		},
 		{
-			name: "zero Verifier address fails",
-			game: AdditionalDisputeGame{
-				VMType: VMTypeZK,
-				ZKDisputeGame: &ZKDisputeGameParams{
-					Verifier:         common.Address{},
-					AbsolutePrestate: prestate,
-				},
-			},
-			expectErr: ErrZKDisputeGameMissingParams,
-		},
-		{
 			name: "zero AbsolutePrestate fails",
 			game: AdditionalDisputeGame{
 				VMType: VMTypeZK,
 				ZKDisputeGame: &ZKDisputeGameParams{
-					Verifier:         verifier,
 					AbsolutePrestate: common.Hash{},
 				},
 			},
@@ -90,7 +87,6 @@ func TestChainIntentCheck_ZKDisputeGame(t *testing.T) {
 			game: AdditionalDisputeGame{
 				VMType: VMTypeZK,
 				ZKDisputeGame: &ZKDisputeGameParams{
-					Verifier:             verifier,
 					AbsolutePrestate:     prestate,
 					MaxChallengeDuration: 0,
 					MaxProveDuration:     7200,
@@ -104,7 +100,6 @@ func TestChainIntentCheck_ZKDisputeGame(t *testing.T) {
 			game: AdditionalDisputeGame{
 				VMType: VMTypeZK,
 				ZKDisputeGame: &ZKDisputeGameParams{
-					Verifier:             verifier,
 					AbsolutePrestate:     prestate,
 					MaxChallengeDuration: 3600,
 					MaxProveDuration:     0,
@@ -114,11 +109,77 @@ func TestChainIntentCheck_ZKDisputeGame(t *testing.T) {
 			expectErr: ErrZKDisputeGameMissingParams,
 		},
 		{
+			// A duration above uint32 max overflows the game's uint64 deadline cast on chain,
+			// putting the deadline in the past so the game is over the instant it is created.
+			name: "MaxChallengeDuration at the bound passes",
+			game: AdditionalDisputeGame{
+				VMType: VMTypeZK,
+				ZKDisputeGame: &ZKDisputeGameParams{
+					AbsolutePrestate:     prestate,
+					MaxChallengeDuration: math.MaxUint32,
+					MaxProveDuration:     math.MaxUint32,
+					ChallengerBond:       (*hexutil.Big)(big.NewInt(1e18)),
+				},
+			},
+			expectErr: nil,
+		},
+		{
+			name: "MaxChallengeDuration above the bound fails",
+			game: AdditionalDisputeGame{
+				VMType: VMTypeZK,
+				ZKDisputeGame: &ZKDisputeGameParams{
+					AbsolutePrestate:     prestate,
+					MaxChallengeDuration: math.MaxUint32 + 1,
+					MaxProveDuration:     7200,
+					ChallengerBond:       (*hexutil.Big)(big.NewInt(1e18)),
+				},
+			},
+			expectErr: ErrZKDisputeGameParamOutOfRange,
+		},
+		{
+			name: "MaxChallengeDuration at uint64 max fails",
+			game: AdditionalDisputeGame{
+				VMType: VMTypeZK,
+				ZKDisputeGame: &ZKDisputeGameParams{
+					AbsolutePrestate:     prestate,
+					MaxChallengeDuration: math.MaxUint64,
+					MaxProveDuration:     7200,
+					ChallengerBond:       (*hexutil.Big)(big.NewInt(1e18)),
+				},
+			},
+			expectErr: ErrZKDisputeGameParamOutOfRange,
+		},
+		{
+			name: "MaxProveDuration above the bound fails",
+			game: AdditionalDisputeGame{
+				VMType: VMTypeZK,
+				ZKDisputeGame: &ZKDisputeGameParams{
+					AbsolutePrestate:     prestate,
+					MaxChallengeDuration: 3600,
+					MaxProveDuration:     math.MaxUint32 + 1,
+					ChallengerBond:       (*hexutil.Big)(big.NewInt(1e18)),
+				},
+			},
+			expectErr: ErrZKDisputeGameParamOutOfRange,
+		},
+		{
+			name: "MaxProveDuration at uint64 max fails",
+			game: AdditionalDisputeGame{
+				VMType: VMTypeZK,
+				ZKDisputeGame: &ZKDisputeGameParams{
+					AbsolutePrestate:     prestate,
+					MaxChallengeDuration: 3600,
+					MaxProveDuration:     math.MaxUint64,
+					ChallengerBond:       (*hexutil.Big)(big.NewInt(1e18)),
+				},
+			},
+			expectErr: ErrZKDisputeGameParamOutOfRange,
+		},
+		{
 			name: "nil ChallengerBond fails",
 			game: AdditionalDisputeGame{
 				VMType: VMTypeZK,
 				ZKDisputeGame: &ZKDisputeGameParams{
-					Verifier:             verifier,
 					AbsolutePrestate:     prestate,
 					MaxChallengeDuration: 3600,
 					MaxProveDuration:     7200,
@@ -132,7 +193,6 @@ func TestChainIntentCheck_ZKDisputeGame(t *testing.T) {
 			game: AdditionalDisputeGame{
 				VMType: VMTypeZK,
 				ZKDisputeGame: &ZKDisputeGameParams{
-					Verifier:             verifier,
 					AbsolutePrestate:     prestate,
 					MaxChallengeDuration: 3600,
 					MaxProveDuration:     7200,

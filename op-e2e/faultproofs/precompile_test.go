@@ -9,17 +9,17 @@ import (
 	"math/big"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/op-e2e/actions/proofs"
 	e2e_config "github.com/ethereum-optimism/optimism/op-e2e/config"
 	"github.com/ethereum-optimism/optimism/op-e2e/system/e2esys"
 	"github.com/ethereum-optimism/optimism/op-e2e/system/helpers"
+	"github.com/ethereum-optimism/optimism/rust/kona/tests/proofs"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/require"
 
@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/disputegame"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
@@ -60,7 +61,7 @@ func TestPrecompile(t *testing.T) {
 		t.Log("Capture current L2 head as agreed starting point")
 		latestBlock, err := l2Seq.BlockByNumber(ctx, nil)
 		require.NoError(t, err)
-		agreedL2Output, err := rollupClient.OutputAtBlock(ctx, latestBlock.NumberU64())
+		agreedL2Output, err := wait.ForOutputAtBlock(ctx, rollupClient, latestBlock.NumberU64())
 		require.NoError(t, err, "could not retrieve l2 agreed block")
 		l2Head := agreedL2Output.BlockRef.Hash
 		l2OutputRoot := agreedL2Output.OutputRoot
@@ -74,7 +75,7 @@ func TestPrecompile(t *testing.T) {
 
 		t.Log("Determine L2 claim")
 		l2ClaimBlockNumber := receipt.BlockNumber
-		l2Output, err := rollupClient.OutputAtBlock(ctx, bigs.Uint64Strict(l2ClaimBlockNumber))
+		l2Output, err := wait.ForOutputAtBlock(ctx, rollupClient, bigs.Uint64Strict(l2ClaimBlockNumber))
 		require.NoError(t, err, "could not get expected output")
 		l2Claim := l2Output.OutputRoot
 
@@ -161,7 +162,7 @@ func TestGranitePrecompiles(t *testing.T) {
 		t.Log("Capture current L2 head as agreed starting point")
 		latestBlock, err := l2Seq.BlockByNumber(ctx, nil)
 		require.NoError(t, err)
-		agreedL2Output, err := rollupClient.OutputAtBlock(ctx, latestBlock.NumberU64())
+		agreedL2Output, err := wait.ForOutputAtBlock(ctx, rollupClient, latestBlock.NumberU64())
 		require.NoError(t, err, "could not retrieve l2 agreed block")
 		l2Head := agreedL2Output.BlockRef.Hash
 		l2OutputRoot := agreedL2Output.OutputRoot
@@ -183,12 +184,16 @@ func TestGranitePrecompiles(t *testing.T) {
 		// Expect a successful receipt to retrieve the EVM call trace so we can inspect the revert reason
 		receipt, err := wait.ForReceiptMaybe(ctx, l2Seq, tx.Hash(), types.ReceiptStatusSuccessful, false)
 		require.NotNil(t, err)
-		require.Contains(t, err.Error(), "bad elliptic curve pairing input size")
+		errMsg := err.Error()
+		require.Truef(t,
+			strings.Contains(errMsg, "bad elliptic curve pairing input size") || // op-geth
+				strings.Contains(errMsg, "precompiled failed"), // op-reth
+			"expected trace error to contain known Granite precompile failure text, got %q", errMsg)
 
 		t.Logf("Transaction hash %v", tx.Hash())
 		t.Log("Determine L2 claim")
 		l2ClaimBlockNumber := receipt.BlockNumber
-		l2Output, err := rollupClient.OutputAtBlock(ctx, bigs.Uint64Strict(l2ClaimBlockNumber))
+		l2Output, err := wait.ForOutputAtBlock(ctx, rollupClient, bigs.Uint64Strict(l2ClaimBlockNumber))
 		require.NoError(t, err, "could not get expected output")
 		l2Claim := l2Output.OutputRoot
 
