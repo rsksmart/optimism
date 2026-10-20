@@ -65,8 +65,8 @@ wherever they conflict.** Read this before acting on anything in those files.
 - In this fork: **inline `IsRSKChain`-gated patches** (the `Apply*RSK` hooks)
   within upstream files. Keep them minimal and gated.
 - **Not** in this fork: the `gorsk/` primitives and `rsk/trie` adapter live in
-  the **opRSK** repo; op-geth is consumed **unmodified**.
-- Prefer adding RSK logic to **opRSK** over patching upstream files here — it
+  the **rootstack** repo; op-geth is consumed **unmodified**.
+- Prefer adding RSK logic to **rootstack** over patching upstream files here — it
   keeps the fork thin and upstream syncs clean.
 
 ## Images and releases
