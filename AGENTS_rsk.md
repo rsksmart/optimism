@@ -69,6 +69,16 @@ wherever they conflict.** Read this before acting on anything in those files.
 - Prefer adding RSK logic to **opRSK** over patching upstream files here — it
   keeps the fork thin and upstream syncs clean.
 
+## Images and releases
+
+- This fork publishes no images and no release artifacts. rootstack builds the
+  contracts and the `oprsk-*` images from the pinned submodule of this repo,
+  and publishes the node, batcher, proposer and challenger images (no deployer
+  image is released).
+- `ops/docker/**` and `docker-bake.hcl` are upstream-only here: no fork
+  workflow builds them. A fork image could not run on RSK anyway, because the
+  hook implementations are registered from rootstack.
+
 ## Patch style: stay close to upstream
 
 - When you must patch an upstream file, prefer the change that stays **closest
