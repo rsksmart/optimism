@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
@@ -263,5 +264,28 @@ func TestRSK_RPCReceiptsFetcher_ReceiptsValidatorHook(t *testing.T) {
 		_, _, err := ethcl.FetchReceipts(ctx, block.Hash)
 		require.ErrorIs(t, err, wantErr)
 		require.NotContains(t, err.Error(), "unexpected nil block number")
+	})
+
+	t.Run("[null] receipt is rejected before the validator", func(t *testing.T) {
+		// eth_getBlockReceipts (RPCKindStandard) can return a null element, which
+		// the conversion handed to the hook would dereference.
+		m := new(mockRPC)
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(420)), numTxs)
+		m.On("CallContext", ctx, mock.Anything, "eth_getBlockReceipts", mock.Anything).
+			Run(func(args mock.Arguments) { *(args[1].(*optypes.Receipts)) = optypes.Receipts{nil} }).
+			Return([]error{nil})
+		called := false
+		rp := NewRPCReceiptsFetcher(m, nil, RPCReceiptsConfig{
+			ProviderKind: RPCKindStandard,
+			ReceiptsValidator: func(context.Context, eth.BlockID, common.Hash, []common.Hash, types.Receipts) error {
+				called = true
+				return nil
+			},
+		})
+		info := eth.HeaderBlockInfoTrusted(block.Hash, block.CreateGethHeader())
+
+		_, err := rp.FetchReceipts(ctx, info, block.Transactions.Hashes())
+		require.ErrorContains(t, err, "receipt of tx 0 returns nil on retrieval")
+		require.False(t, called, "the validator must not see a null receipt")
 	})
 }

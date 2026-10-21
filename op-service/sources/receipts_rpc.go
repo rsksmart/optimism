@@ -116,6 +116,13 @@ func (f *RPCReceiptsFetcher) FetchReceipts(ctx context.Context, blockInfo eth.Bl
 	}
 
 	if f.validator != nil {
+		// Geth() dereferences every receipt, so reject a null one first, as
+		// validateReceipts does on the default path.
+		for i, r := range result {
+			if r == nil {
+				return nil, fmt.Errorf("receipt of tx %d returns nil on retrieval", i)
+			}
+		}
 		// The hook sees the standard go-ethereum receipt fields only, which is
 		// all a non-Ethereum L1 receipt carries.
 		if err = f.validator(ctx, block, blockInfo.ReceiptHash(), txHashes, result.Geth()); err != nil {
