@@ -12,7 +12,7 @@
 
 ## Before you open this
 
-Tick every box in this section and the two below. An unticked box blocks the merge.
+Each section is ticked by its owner: the author here, then the reviewer and the merger below. An unticked box blocks the merge.
 
 - [ ] I ran `/simplify` and fixed the findings
 - [ ] I ran `/code-review` and fixed the findings

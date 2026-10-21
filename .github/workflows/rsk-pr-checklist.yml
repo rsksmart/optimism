@@ -2,7 +2,9 @@
 # template is missing from the PR body or unticked: the author's "Before you open
 # this", the reviewer's "For the reviewer" and the merger's "For the merger". The
 # check reads the raw text of the PR body, not who ticked a box or how the page
-# renders it, so a ticked box inside a code fence or an HTML comment still counts.
+# renders it, so a ticked box inside a code fence or an HTML comment still counts,
+# and any unticked box anywhere in the body blocks, even one that is not in the
+# template.
 # (Only rsk/** bases; the develop/main upstream mirrors are intentionally excluded.)
 #
 # Ticking a box edits the body, which fires `edited` and re-runs the check.
@@ -16,6 +18,7 @@ on:
 
 permissions:
   contents: read # the template on the base branch
+  pull-requests: read # the PR body
 
 # Each ticked box fires `edited`. Only the newest run's result matters.
 concurrency:
@@ -36,10 +39,15 @@ jobs:
       - name: Validate the template checkboxes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
+
+          # Read the body from the API, never the event payload: a re-run
+          # replays the body of the original event. So a box unticked after an
+          # older run passed still blocks the merge.
+          PR_BODY=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')
 
           # Read from the base branch, so a PR cannot drop a box by editing the
           # template it is checked against.
@@ -54,10 +62,10 @@ jobs:
             { sub(/[ \t\r]+$/, "") }
             NR == FNR { if (sub(/^- \[ \] /, "")) { want[$0] = 1; n++ }; next }
             sub(/^- \[[xX]\] /, "") { delete want[$0]; next }
-            sub(/^[ \t]*[-*+] \[ \][ \t]*/, "") { print "::error::unticked: " $0; open[$0] = bad = 1; next }
+            sub(/^[ \t]*([-*+]|[0-9]+[.)]) \[ \][ \t]*/, "") { print "::error::unticked: " $0; delete want[$0]; bad = 1; next }
             END {
               if (!n) { print "::error::the template on the base branch has no checkboxes"; exit 1 }
-              for (t in want) if (!(t in open)) { print "::error::missing: " t; bad = 1 }
+              for (t in want) { print "::error::missing: " t; bad = 1 }
               if (!bad) print "ok: every template checkbox is ticked"
               exit bad
             }
