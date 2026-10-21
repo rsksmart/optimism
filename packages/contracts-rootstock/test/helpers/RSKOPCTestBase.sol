@@ -10,7 +10,7 @@ import {Types} from "scripts/libraries/Types.sol";
 import {Constants as ScriptConstants} from "scripts/libraries/Constants.sol";
 
 import {Constants} from "src/libraries/Constants.sol";
-import {Claim, Duration, GameType, GameTypes} from "src/dispute/lib/Types.sol";
+import {Claim, Duration, GameType, GameTypes, Hash, Proposal} from "src/dispute/lib/Types.sol";
 
 import {IOPContractsManagerUtils} from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import {ISuperchainConfig} from "interfaces/L1/ISuperchainConfig.sol";
@@ -203,6 +203,21 @@ abstract contract RSKOPCTestBase is Test {
             superchainConfig: superchainConfig,
             useCustomGasToken: false
         });
+    }
+
+    /// @dev A starting anchor that is neither zero nor the 0xdead placeholder,
+    ///      which the fault games reject on an initial deployment.
+    function _realAnchor() internal pure returns (Proposal memory) {
+        return Proposal({root: Hash.wrap(keccak256("anchor")), l2SequenceNumber: 1});
+    }
+
+    /// @dev Enables the fault game at `_index` with a bond and a prestate, so
+    ///      only the rules about which games may be enabled can reject it.
+    function _enableFaultGame(uint256 _index) internal {
+        fullConfig.disputeGameConfigs[_index].enabled = true;
+        fullConfig.disputeGameConfigs[_index].initBond = 1;
+        fullConfig.disputeGameConfigs[_index].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({absolutePrestate: absolutePrestate}));
     }
 
     /// @dev Step 1a pins `fullConfig`, so a test that changes it does so before

@@ -3,6 +3,8 @@ pragma solidity 0.8.15;
 
 import {IProxyAdmin} from "interfaces/universal/IProxyAdmin.sol";
 import {IETHLockbox} from "interfaces/L1/IETHLockbox.sol";
+import {IOPContractsManagerContainer} from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
+import {IOPContractsManagerUtils} from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import {IDelayedWETH} from "interfaces/dispute/IDelayedWETH.sol";
 import {IDisputeGame} from "interfaces/dispute/IDisputeGame.sol";
 import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
@@ -12,10 +14,13 @@ import {DevFeatures} from "src/libraries/DevFeatures.sol";
 import {Claim, GameStatus, GameTypes, Hash, Proposal} from "src/dispute/lib/Types.sol";
 
 import {RSKOPCMSplitter} from "../contracts/RSKOPCMSplitter.sol";
+import {RSKOPCMSplitter_Harness} from "./helpers/RSKOPCMSplitterHarness.sol";
 import {RSKOPCTestBase} from "./helpers/RSKOPCTestBase.sol";
 
 contract RSKOPCMSplitter_Test is RSKOPCTestBase {
-    function test_constructorAndGetters() public {
+    function test_constructorAndGetters() public view {
+        assertEq(address(splitter.opcmV2()), address(implementationsOutput.opcmV2));
+        assertEq(address(splitter.opcmUtils()), address(implementationsOutput.opcmUtils));
         assertEq(address(splitter.container()), address(implementationsOutput.opcmContainer));
         assertEq(address(splitter.contractsContainer()), address(implementationsOutput.opcmContainer));
         assertEq(splitter.deployer(), address(this));
@@ -30,7 +35,22 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         assertEq(address(splitter.implementations().systemConfigImpl), address(implementationsOutput.systemConfigImpl));
     }
 
-    /// @notice op-contracts v9 hard-wires SUPER_ROOT_GAMES_MIGRATION on, which
+    /// @notice SystemConfig records the OPCMv2 the splitter mirrors, not the
+    ///         splitter, so the upgrade-sequence check a stock OPCMv2 runs
+    ///         before `upgrade` can read the chain's last-used version.
+    function test_lastUsedOPCM_isOpcmV2_succeeds() public {
+        RSKOPCMSplitter.ChainContracts memory cts = _runSplitter();
+
+        assertEq(cts.systemConfig.lastUsedOPCM(), address(implementationsOutput.opcmV2));
+        assertEq(cts.systemConfig.lastUsedOPCMVersion(), implementationsOutput.opcmV2.version());
+        assertTrue(
+            IOPContractsManagerUtils(address(implementationsOutput.opcmUtils)).isPermittedUpgradeSequence(
+                cts.systemConfig, address(implementationsOutput.opcmV2)
+            )
+        );
+    }
+
+    /// @notice OPCMv2 9.0.2 hard-wires SUPER_ROOT_GAMES_MIGRATION on, which
     ///         upstream's OPCM reads as "initial deployments use super-root
     ///         games only". The splitter keeps PERMISSIONED_CANNON deployable
     ///         as the respected game (RSK divergence, see its header).
@@ -96,7 +116,7 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
 
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
         assertEq(splitter.phase(), 3);
-        // op-contracts v9: the ETHLockbox is mandatory, so step 2 turns the
+        // OPCMv2 9.0.2: the ETHLockbox is mandatory, so step 2 turns the
         // feature on and points the portal at it.
         assertTrue(chainContracts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
         assertEq(address(chainContracts.optimismPortal.ethLockbox()), address(chainContracts.ethLockbox));
@@ -162,48 +182,56 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
 
     function test_invalidGameConfigs_length_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs.pop();
-        _startAtStep2();
-
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
-        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
-        assertEq(splitter.phase(), 2);
+        _assertStep2RejectsConfig();
     }
 
     function test_invalidGameConfigs_order_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs[0].gameType = GameTypes.PERMISSIONED_CANNON;
-        _startAtStep2();
-
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
-        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
-        assertEq(splitter.phase(), 2);
+        _assertStep2RejectsConfig();
     }
 
     function test_invalidGameConfigs_disabledBond_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs[0].initBond = 1;
-        _startAtStep2();
-
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
-        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
-        assertEq(splitter.phase(), 2);
+        _assertStep2RejectsConfig();
     }
 
+    /// @notice CANNON gets a bond, a prestate and a real anchor, so the
+    ///         initial-deploy game rule is the only one that rejects it.
     function test_invalidGameConfigs_nonPermissionedEnabled_revertsAndLeavesPhase() public {
-        fullConfig.disputeGameConfigs[0].enabled = true;
-        _startAtStep2();
+        fullConfig.startingAnchorRoot = _realAnchor();
+        _enableFaultGame(0);
+        _assertStep2RejectsConfig();
+    }
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
-        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
-        assertEq(splitter.phase(), 2);
+    /// @notice PERMISSIONED_CANNON is the only game an initial deployment may
+    ///         enable while SUPER_ROOT_GAMES_MIGRATION is on, so it never
+    ///         shares a deployment with a super-root game.
+    function test_invalidGameConfigs_withSuperPermissioned_revertsAndLeavesPhase() public {
+        fullConfig.disputeGameConfigs[3].enabled = true;
+        fullConfig.disputeGameConfigs[3].gameArgs = fullConfig.disputeGameConfigs[1].gameArgs;
+        _assertStep2RejectsConfig();
+    }
+
+    function test_invalidGameConfigs_withSuperCannonKona_revertsAndLeavesPhase() public {
+        fullConfig.startingAnchorRoot = _realAnchor();
+        _enableFaultGame(4);
+        _assertStep2RejectsConfig();
     }
 
     function test_invalidGameConfigs_startingTypeDisabled_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs[1].enabled = false;
         fullConfig.disputeGameConfigs[1].initBond = 0;
-        _startAtStep2();
+        _assertStep2RejectsConfig();
+    }
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
-        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
-        assertEq(splitter.phase(), 2);
+    function test_invalidGameConfigs_zeroAnchorRoot_revertsAndLeavesPhase() public {
+        fullConfig.startingAnchorRoot = Proposal({root: Hash.wrap(bytes32(0)), l2SequenceNumber: 0});
+        _assertStep2RejectsConfig();
+    }
+
+    function test_invalidGameConfigs_maxAnchorSequenceNumber_revertsAndLeavesPhase() public {
+        fullConfig.startingAnchorRoot.l2SequenceNumber = type(uint64).max;
+        _assertStep2RejectsConfig();
     }
 
     /// @notice Every stage after 1a must get the config 1a pinned. The changed
@@ -335,5 +363,142 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         splitter.step4b_anchorAndGames(fullConfig, chainContracts);
         splitter.step5_finalize(fullConfig, chainContracts);
         assertEq(splitter.phase(), 255);
+    }
+
+    /// @notice Step 4b clears the retired SUPER_CANNON slot. The slot is
+    ///         already empty on a fresh chain, so only the calls show the
+    ///         clear ran. `setImplementation` is overloaded, hence the
+    ///         signature string.
+    function test_step4b_clearsSuperCannon_succeeds() public {
+        _startAtStep4b();
+        address dgf = address(chainContracts.disputeGameFactory);
+
+        vm.expectCall(
+            dgf,
+            abi.encodeWithSignature(
+                "setImplementation(uint32,address,bytes)", GameTypes.SUPER_CANNON, address(0), bytes("")
+            )
+        );
+        vm.expectCall(dgf, abi.encodeCall(IDisputeGameFactory.setInitBond, (GameTypes.SUPER_CANNON, 0)));
+        splitter.step4b_anchorAndGames(fullConfig, chainContracts);
+    }
+
+    /// @notice An enabled game whose implementation is zero or has no code
+    ///         stops step 4b before it registers anything.
+    function test_zeroGameImplementation_revertsAndLeavesPhase() public {
+        _startAtStep4b();
+        IOPContractsManagerContainer.Implementations memory impls = splitter.implementations();
+        bytes memory zeroImplError = abi.encodeWithSelector(
+            RSKOPCMSplitter.RSKOPCMSplitter_ZeroGameImplementation.selector, GameTypes.PERMISSIONED_CANNON
+        );
+
+        impls.permissionedDisputeGameImpl = address(0);
+        _mockImplementations(impls);
+        vm.expectRevert(zeroImplError);
+        splitter.step4b_anchorAndGames(fullConfig, chainContracts);
+        assertEq(splitter.phase(), 5);
+
+        impls.permissionedDisputeGameImpl = makeAddr("noCodeGameImpl");
+        _mockImplementations(impls);
+        vm.expectRevert(zeroImplError);
+        splitter.step4b_anchorAndGames(fullConfig, chainContracts);
+        assertEq(splitter.phase(), 5);
+
+        vm.clearMockedCalls();
+        splitter.step4b_anchorAndGames(fullConfig, chainContracts);
+        assertEq(splitter.phase(), 6);
+    }
+
+    /// @notice Step 2 moves the portal's ETH into the lockbox.
+    function test_step2_migratesPortalLiquidity_succeeds() public {
+        _startAtStep2();
+        vm.deal(address(chainContracts.optimismPortal), 1 ether);
+
+        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
+
+        assertEq(address(chainContracts.optimismPortal).balance, 0);
+        assertEq(address(chainContracts.ethLockbox).balance, 1 ether);
+    }
+
+    /// @notice A custom gas token chain keeps its ETH in the portal, and step
+    ///         4b turns the feature on.
+    function test_step2_customGasToken_keepsPortalLiquidity_succeeds() public {
+        fullConfig.useCustomGasToken = true;
+        _startAtStep2();
+        vm.deal(address(chainContracts.optimismPortal), 1 ether);
+
+        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
+
+        assertEq(address(chainContracts.optimismPortal).balance, 1 ether);
+        assertEq(address(chainContracts.ethLockbox).balance, 0);
+
+        splitter.step3_messengerAndBridges(fullConfig, chainContracts);
+        splitter.step4a_disputeFactoryAndWeth(fullConfig, chainContracts);
+        splitter.step4b_anchorAndGames(fullConfig, chainContracts);
+        assertTrue(chainContracts.systemConfig.isCustomGasToken());
+    }
+
+    /// @dev Step 1a pins `fullConfig`, so the caller changes it first.
+    function _assertStep2RejectsConfig() internal {
+        _startAtStep2();
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
+        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
+        assertEq(splitter.phase(), 2);
+    }
+
+    function _startAtStep4b() internal {
+        _startAtStep2();
+        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
+        splitter.step3_messengerAndBridges(fullConfig, chainContracts);
+        splitter.step4a_disputeFactoryAndWeth(fullConfig, chainContracts);
+    }
+
+    /// @dev Both the splitter and OPContractsManagerUtils read the
+    ///      implementations from the container.
+    function _mockImplementations(IOPContractsManagerContainer.Implementations memory _impls) internal {
+        vm.mockCall(
+            address(implementationsOutput.opcmContainer),
+            abi.encodeCall(IOPContractsManagerContainer.implementations, ()),
+            abi.encode(_impls)
+        );
+    }
+}
+
+/// @notice The two RSK divergences in `_assertValidFullConfig`, reached
+///         through the harness.
+contract RSKOPCMSplitter_AssertValidFullConfig_Test is RSKOPCTestBase {
+    RSKOPCMSplitter_Harness internal harness;
+
+    function setUp() public override {
+        super.setUp();
+        harness = new RSKOPCMSplitter_Harness(implementationsOutput.opcmV2);
+    }
+
+    /// @notice Upgrade mode skips the initial-deploy game rule, so the same
+    ///         CANNON config the initial deployment rejects passes here.
+    function test_assertValidFullConfig_upgradeNonPermissioned_succeeds() public {
+        fullConfig.startingAnchorRoot = _realAnchor();
+        _enableFaultGame(0);
+        harness.assertValidFullConfig(fullConfig, false);
+    }
+
+    /// @notice Only the permissioned games are exempt from the bond rule.
+    function test_assertValidFullConfig_zeroBondCannonKona_reverts() public {
+        _enableFaultGame(2);
+        fullConfig.disputeGameConfigs[2].initBond = 0;
+
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
+        harness.assertValidFullConfig(fullConfig, false);
+
+        fullConfig.disputeGameConfigs[2].initBond = 1;
+        harness.assertValidFullConfig(fullConfig, false);
+    }
+
+    /// @notice RSK divergence: PERMISSIONED_CANNON may carry a zero bond
+    ///         (PAYROLLUP-191), in upgrade mode as well.
+    function test_assertValidFullConfig_zeroBondPermissionedCannon_succeeds() public {
+        fullConfig.disputeGameConfigs[1].initBond = 0;
+        harness.assertValidFullConfig(fullConfig, true);
+        harness.assertValidFullConfig(fullConfig, false);
     }
 }
