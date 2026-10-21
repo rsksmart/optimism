@@ -62,7 +62,7 @@ jobs:
             { sub(/[ \t\r]+$/, "") }
             NR == FNR { if (sub(/^- \[ \] /, "")) { want[$0] = 1; n++ }; next }
             sub(/^- \[[xX]\] /, "") { delete want[$0]; next }
-            sub(/^[ \t]*([-*+]|[0-9]+[.)]) \[ \][ \t]*/, "") { print "::error::unticked: " $0; delete want[$0]; bad = 1; next }
+            sub(/^[ \t>]*([-*+]|[0-9]+[.)])[ \t]+\[ \][ \t]*/, "") { print "::error::unticked: " $0; delete want[$0]; bad = 1; next }
             END {
               if (!n) { print "::error::the template on the base branch has no checkboxes"; exit 1 }
               for (t in want) { print "::error::missing: " t; bad = 1 }
