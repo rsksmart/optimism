@@ -42,9 +42,6 @@ import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
-import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
-import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
-import { IOPContractsManagerMigrator } from "interfaces/L1/opcm/IOPContractsManagerMigrator.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
@@ -147,21 +144,14 @@ contract RSKDeployOPChain is Script {
 
         IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_input.opcm);
 
-        // Pull the same constructor deps the deployed OPCMv2 was built with —
-        // splitter must reference the same Container/Utils/Migrator contracts
-        // or the inherited `_loadOrDeployProxy` / `_upgrade` helpers will
-        // delegatecall into the wrong utils bytecode.
-        IOPContractsManagerUtils utils = opcmV2.opcmUtils();
-        IOPContractsManagerContainer container = opcmV2.contractsContainer();
-        IOPContractsManagerStandardValidator validator = opcmV2.opcmStandardValidator();
-        IOPContractsManagerMigrator migrator = opcmV2.opcmMigrator();
-
         // Build the FullConfig identically to upstream `_toOPCMV2DeployInput`.
         RSKOPCMSplitter.FullConfig memory cfg = _toFullConfig(_input, _initBond);
 
         // ----------- BROADCAST 1 — deploy the splitter -----------
+        // The splitter reads its utils, container, validator and migrator from
+        // `opcmV2`, so its inherited helpers delegatecall into the same utils.
         vm.broadcast(msg.sender);
-        RSKOPCMSplitter splitter = new RSKOPCMSplitter(utils, container, validator, migrator);
+        RSKOPCMSplitter splitter = new RSKOPCMSplitter(opcmV2);
 
         // ----------- BROADCAST 2 — core proxies (1st half of _loadChainContracts) -----------
         vm.broadcast(msg.sender);
@@ -219,7 +209,7 @@ contract RSKDeployOPChain is Script {
 
     function _toFullConfig(Types.DeployOPChainInput memory _input, uint256 _initBond)
         internal
-        view
+        pure
         returns (RSKOPCMSplitter.FullConfig memory cfg_)
     {
         require(
@@ -236,7 +226,7 @@ contract RSKDeployOPChain is Script {
 
         // Order must match VALID_GAME_TYPES in RSKOPCMSplitter._assertValidFullConfig
         // (the same order upstream's OPContractsManagerV2 requires). RSK enables
-        // only PERMISSIONED_CANNON, with `_initBond`, even though op-contracts v9
+        // only PERMISSIONED_CANNON, with `_initBond`, even though OPCMv2 9.0.2
         // hard-wires SUPER_ROOT_GAMES_MIGRATION on (see the splitter's header).
         // Every disabled entry keeps a literal 0 bond, which the splitter requires.
         IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
@@ -316,7 +306,6 @@ contract RSKDeployOPChain is Script {
         returns (Output memory output_)
     {
         address permissionedDgImpl = address(_cts.disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON));
-        address faultDgImpl = address(_cts.disputeGameFactory.gameImpls(GameTypes.CANNON_KONA));
 
         output_ = Output({
             opChainProxyAdmin: _cts.proxyAdmin,
@@ -330,8 +319,11 @@ contract RSKDeployOPChain is Script {
             ethLockboxProxy: _cts.ethLockbox,
             disputeGameFactoryProxy: _cts.disputeGameFactory,
             anchorStateRegistryProxy: _cts.anchorStateRegistry,
-            // Zero unless a permissionless game was enabled, which RSK never does.
-            faultDisputeGame: IFaultDisputeGame(faultDgImpl),
+            // Upstream reads its family's permissionless game here. RSK enables
+            // only a permissioned game, PERMISSIONED_CANNON now and
+            // SUPER_PERMISSIONED once PAYROLLUP-16 lands, so the slot is zero
+            // in either family.
+            faultDisputeGame: IFaultDisputeGame(address(0)),
             permissionedDisputeGame: IPermissionedDisputeGame(permissionedDgImpl),
             delayedWETHPermissionedGameProxy: _cts.delayedWETH,
             delayedWETHPermissionlessGameProxy: IDelayedWETH(payable(_cts.delayedWETH))

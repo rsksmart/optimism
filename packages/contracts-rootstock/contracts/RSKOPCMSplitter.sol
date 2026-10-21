@@ -5,9 +5,9 @@ pragma solidity 0.8.15;
 // RSKOPCMSplitter
 //
 // A thin one-shot helper contract that decomposes the upstream
-// OPContractsManagerV2 chain-management entry points (`deploy`, `upgrade`,
-// `migrate`) into multi-tx sequences each fitting under RSKj's RSKIP144 6.8M
-// per-tx sublist gas cap.
+// OPContractsManagerV2 initial deployment (`deploy`) into a multi-tx sequence
+// in which each transaction fits under RSKj's RSKIP144 6.8M per-tx sublist
+// gas cap. `upgrade` and `migrate` are not split yet (F1.1).
 //
 // Invariants vs upstream:
 //   * Inherits `OPContractsManagerUtilsCaller` to reuse the inherited
@@ -18,9 +18,15 @@ pragma solidity 0.8.15;
 //     dance, the L1StandardBridge ChugSplash quirk, downgrade protection,
 //     version-tag checks, etc. all carry over exactly.
 //   * `_loadChainContracts` and `_apply` are lifted line-for-line from
-//     `OPContractsManagerV2.sol` (op-contracts v9, op-node/v1.19.9) and split
+//     `OPContractsManagerV2.sol` (version 9.0.2, as `develop` ships it at
+//     op-node/v1.19.9; there is no op-contracts/v9 release tag) and split
 //     into stage methods. Each stage's body is a contiguous slice of
 //     upstream's straight-line code; nothing is reordered.
+//   * The constructor takes the deployed OPCMv2 and reads its utils,
+//     container, validator and migrator, so the splitter cannot point at a
+//     different release. Step 2 records that OPCMv2, not the splitter, as
+//     the chain's `lastUsedOPCM`, as upstream does, so a stock OPCMv2 can
+//     later upgrade the chain.
 //   * Every stage gets the same inputs. Upstream's `deploy` is one call, so
 //     `_apply` acts on the config it validated. Split into transactions,
 //     each stage takes `_cfg` and `_cts` from the caller again, so step 1a
@@ -30,11 +36,13 @@ pragma solidity 0.8.15;
 //     never validated.
 //   * Two deliberate divergences in `_assertValidFullConfig`, both about
 //     PERMISSIONED_CANNON (the output-root permissioned game RSK deploys):
-//     - an initial deployment may enable it although op-contracts v9
+//     - an initial deployment may enable it although OPCMv2 9.0.2
 //       hard-wires SUPER_ROOT_GAMES_MIGRATION on, which upstream reads as
 //       "initial deployments use super-root games only". RSK runs one L2
 //       per L1 with no interop, so a super-root game buys nothing and would
-//       make the proposer depend on a super-root RPC;
+//       make the proposer depend on a super-root RPC. With the flag on it
+//       is the only game an initial deployment may enable: the super-root
+//       games stay off, so one deployment never mixes the two families;
 //     - it may carry a zero init bond. Upstream requires a non-zero bond for
 //       every enabled game except SUPER_PERMISSIONED; on a permissioned game
 //       only the proposer can create games, so the bond is parked capital
@@ -47,8 +55,7 @@ pragma solidity 0.8.15;
 // The `deployer` immutable is the operator EOA that constructed the
 // splitter; only that EOA may call into the stage methods. The splitter
 // itself owns the ProxyAdmin during the deploy session and transfers
-// ownership to `_cfg.proxyAdminOwner` at the very end of stage 5 (initial
-// deployments only — upgrades skip the terminal transfer).
+// ownership to `_cfg.proxyAdminOwner` at the very end of stage 5.
 // =============================================================================
 
 import { OPContractsManagerUtilsCaller } from "src/L1/opcm/OPContractsManagerUtilsCaller.sol";
@@ -79,6 +86,7 @@ import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsMan
 import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import { IOPContractsManagerMigrator } from "interfaces/L1/opcm/IOPContractsManagerMigrator.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 
 contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     // -----------------------------------------------------------------------
@@ -165,6 +173,11 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     // Immutables
     // -----------------------------------------------------------------------
 
+    /// @notice The OPCMv2 this splitter mirrors. Step 2 records it in
+    ///         SystemConfig as the chain's last-used OPCM, as upstream records
+    ///         itself.
+    IOPContractsManagerV2 public immutable opcmV2;
+
     /// @notice Container that holds the Implementations + Blueprints arrays.
     ///         Read-through from `blueprints()` / `implementations()`.
     IOPContractsManagerContainer public immutable container;
@@ -173,9 +186,9 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///         account may drive the stage methods.
     address public immutable deployer;
 
-    /// @notice Standard validator + migrator addresses, mirrored from
-    ///         the OPCMv2 release. Only `migrator` is referenced post-
-    ///         construction (via `migrate`).
+    /// @notice Standard validator + migrator addresses of the OPCMv2 release.
+    ///         Neither is referenced here; the upgrade and migrate paths (F1.1)
+    ///         will need them.
     IOPContractsManagerStandardValidator public immutable opcmStandardValidator;
     IOPContractsManagerMigrator public immutable opcmMigrator;
 
@@ -205,8 +218,9 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///      games) keeps both substages well under.
     uint8 public phase;
 
-    /// @notice True when the active session is an initial deployment (gates
-    ///         terminal ownership transfers in step5). False on upgrades.
+    /// @notice True once step 1a starts an initial deployment (gates the
+    ///         terminal ownership transfers in step5). Only the upgrade path
+    ///         (F1.1) would leave it false.
     bool public isInitialDeployment;
 
     /// @notice keccak256 of the `FullConfig` passed to step 1a. Every later
@@ -221,25 +235,16 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     // Construction
     // -----------------------------------------------------------------------
 
-    /// @param _utils    OPContractsManagerUtils — same instance the deployed
-    ///                  OPCMv2 references.
-    /// @param _container OPContractsManagerContainer — same instance the
-    ///                  deployed OPCMv2 references. Holds the shared
-    ///                  Implementations + Blueprints arrays.
-    /// @param _validator Standard validator (forwarded; not invoked here).
-    /// @param _migrator OPCMMigrator (delegatecalled by `migrate`).
-    constructor(
-        IOPContractsManagerUtils _utils,
-        IOPContractsManagerContainer _container,
-        IOPContractsManagerStandardValidator _validator,
-        IOPContractsManagerMigrator _migrator
-    )
-        OPContractsManagerUtilsCaller(_utils)
-    {
-        container = _container;
+    /// @param _opcmV2 The deployed OPCMv2. Its utils, container, validator and
+    ///                migrator are read here, so the inherited helpers
+    ///                delegatecall into the same OPContractsManagerUtils and read
+    ///                the same Implementations + Blueprints as that OPCMv2.
+    constructor(IOPContractsManagerV2 _opcmV2) OPContractsManagerUtilsCaller(_opcmV2.opcmUtils()) {
+        opcmV2 = _opcmV2;
+        container = _opcmV2.contractsContainer();
         deployer = msg.sender;
-        opcmStandardValidator = _validator;
-        opcmMigrator = _migrator;
+        opcmStandardValidator = _opcmV2.opcmStandardValidator();
+        opcmMigrator = _opcmV2.opcmMigrator();
     }
 
     // -----------------------------------------------------------------------
@@ -409,11 +414,13 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
         // Lines 829-836 — the upgrade-sequence check only runs on upgrades,
         // and this splitter only supports initial deployments (see the note
-        // above this stage).
+        // above this stage). The upgrade path (F1.1) must run
+        // `_isPermittedUpgradeSequence(_cts.systemConfig, address(opcmV2))`
+        // here, before `_upgrade` overwrites `lastUsedOPCM`.
 
-        // Lines 838-865 — SystemConfig. `opcm` is the splitter: the chain is
-        // deployed by it rather than by an OPCMv2 instance, and SystemConfig
-        // stores it as the OPCM that last managed the chain.
+        // Lines 838-865 — SystemConfig. `opcm` is `opcmV2`, as upstream, so
+        // `lastUsedOPCM` has a `version()` and a stock OPCMv2 can upgrade the
+        // chain.
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.systemConfig),
@@ -434,7 +441,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
                         optimismPortal: address(_cts.optimismPortal),
                         optimismMintableERC20Factory: address(_cts.optimismMintableERC20Factory),
                         delayedWETH: address(_cts.delayedWETH),
-                        opcm: address(this)
+                        opcm: address(opcmV2)
                     }),
                     l2ChainId: _cfg.l2ChainId,
                     superchainConfig: _cfg.superchainConfig
@@ -632,7 +639,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
     // =======================================================================
     // MIGRATE — moved to RSKOPCMSplitterUpgrade (see note above stage 2). The
-    // migrator immutable is still wired through the constructor so the future
+    // constructor still reads the migrator from `opcmV2`, so the future
     // sibling contract can read it from a deployed splitter if needed.
     // =======================================================================
 
@@ -1064,7 +1071,8 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     /// @dev Port of `OPCMv2._assertValidFullConfig` (upstream lines 691-803).
     ///      Two RSK divergences, both marked inline and both about
     ///      PERMISSIONED_CANNON: it is valid in an initial deployment despite the
-    ///      super-root flag, and it may carry a zero init bond (PAYROLLUP-191).
+    ///      super-root flag, in place of the super-root games, and it may carry
+    ///      a zero init bond (PAYROLLUP-191).
     function _assertValidFullConfig(FullConfig memory _cfg, bool _isInitialDeployment) internal view {
         if (_cfg.disputeGameConfigs.length != VALID_GAME_TYPE_COUNT) {
             revert RSKOPCMSplitter_InvalidGameConfigs();
@@ -1116,16 +1124,14 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             }
 
             // RSK divergence: upstream lets an initial deployment enable only the
-            // super-root games while SUPER_ROOT_GAMES_MIGRATION is on, and
-            // op-contracts v9 hard-wires that flag on (DevFeatures). RSK runs one L2
-            // per L1 with no interop, so it keeps deploying PERMISSIONED_CANNON, the
+            // super-root games while SUPER_ROOT_GAMES_MIGRATION is on, and OPCMv2
+            // 9.0.2 hard-wires that flag on (DevFeatures). RSK runs one L2 per L1
+            // with no interop, so it keeps deploying PERMISSIONED_CANNON, the
             // output-root game OptimismPortal2 still proves withdrawals against.
-            bool validForInitialDeploy = isPermissionedCannonGame
-                || (
-                    superRootGamesMigrationEnabled
-                        ? (isSuperPermissionedGame || isSuperCannonKonaGame)
-                        : isCannonKonaGame
-                );
+            // With the flag on that is the only valid game: the super-root games
+            // are not, so a deployment never mixes the two families.
+            bool validForInitialDeploy =
+                isPermissionedCannonGame || (!superRootGamesMigrationEnabled && isCannonKonaGame);
             if (_isInitialDeployment && _cfg.disputeGameConfigs[i].enabled && !validForInitialDeploy) {
                 revert RSKOPCMSplitter_InvalidGameConfigs();
             }

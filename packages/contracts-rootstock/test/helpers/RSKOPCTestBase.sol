@@ -125,12 +125,7 @@ abstract contract RSKOPCTestBase is Test {
         );
 
         _initializeFullConfig();
-        splitter = new RSKOPCMSplitter(
-            implementationsOutput.opcmUtils,
-            implementationsOutput.opcmContainer,
-            implementationsOutput.opcmStandardValidator,
-            implementationsOutput.opcmMigrator
-        );
+        splitter = new RSKOPCMSplitter(implementationsOutput.opcmV2);
 
         deployInput = _defaultDeployInput();
     }
