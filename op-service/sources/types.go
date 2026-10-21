@@ -46,7 +46,7 @@ type (
 	// block as reported by the L1 RPC. Used when the local computation of
 	// tx hashes (via tx.Hash()) differs from the L1's, e.g. RSK with its
 	// custom RLP encoding for internal REMASC transactions. If nil, hashes
-	// are computed locally from the decoded transactions.
+	// are the keccak of the raw transaction encodings (RawTransactions.Hashes).
 	TxHashesFromBlockFn func(ctx context.Context, blockHash common.Hash) ([]common.Hash, error)
 )
 
