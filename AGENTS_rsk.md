@@ -172,8 +172,9 @@ the code.
   upstream's, **prefixed `rsk-`** — the filename (`rsk-<thing>.yml`) and the
   `name:` field. This flags them as RSK-owned and avoids filename collisions on
   upstream sync (a workflow upstream would call `foo.yml` we add as `rsk-foo.yml`).
-- Scope triggers to the RSK surface — e.g. `branches: [rsk/**]` /
-  `tags: ['rsk/**']` — so upstream's `develop`/`main` mirrors aren't affected.
+- Scope triggers to the RSK branches, e.g. `branches: [rsk/**]`, so upstream's
+  `develop`/`main` mirrors aren't affected. No fork workflow runs on tags: the
+  fork has no release flow (see *Images and releases*).
 - **Pin every third-party action to a full commit SHA**, with the version as a
   trailing comment (`uses: actions/checkout@<sha> # v4`) — never a mutable tag
   (`@v4`, `@main`). A tag can be repointed at malicious code; a commit SHA can't.
