@@ -1,17 +1,26 @@
 # oprsk-contracts — F1 design plan
 
-## Status update (2026-10-12, upstream op-node/v1.19.9 / op-contracts v9)
+## Status update (2026-10-21, upstream op-node/v1.19.9 / OPContractsManagerV2 9.0.2)
 
-The splitter now mirrors OPCMv2 at op-node/v1.19.9. What changed against the
-design below:
+The splitter now mirrors `OPContractsManagerV2` 9.0.2, as `develop` ships it
+at op-node/v1.19.9. There is no `op-contracts/v9` release tag: the latest is
+`op-contracts/v8.0.0`. What changed against the design below:
 
 - Stages are 1a, 1b, 2, 3, 4a, 4b and 5 (stage 1 and 4 were split for gas).
-  `forge test` (Ethereum gas schedule) measures every stage under 3.5 M raw;
-  the largest is 1b.
-- The splitter is 19,978 bytes deployed (4,598 bytes EIP-170 margin):
+  `forge test --gas-report` (Ethereum gas schedule) measures every stage
+  under 3.6 M raw; the largest is 1b. DEPLOY.md has the per-stage table.
+- The splitter is 21,021 bytes deployed (3,555 bytes EIP-170 margin):
   upstream moved the SystemConfig initializer encoding into
   `OPContractsManagerUtilsCaller._encodeSystemConfigInit`, and the interop
   branches left `_apply`.
+- The constructor takes the deployed OPCMv2 and reads its utils, container,
+  validator and migrator from it. Step 2 records that OPCMv2 as the chain's
+  `lastUsedOPCM`, as upstream does, so `lastUsedOPCMVersion()` and the
+  upgrade-sequence check a stock OPCMv2 runs before `upgrade` work on chains
+  the splitter deploys. Chains deployed before this change record the
+  splitter instead, which has no `version()`. The upgrade path (F1.1) must
+  run `_isPermittedUpgradeSequence` before step 2's `_upgrade` (noted inline
+  there).
 - The ETHLockbox is mandatory: step 2 enables the feature, initializes the
   portal and the lockbox with it, and migrates the portal's liquidity.
   DelayedWETH and the AnchorStateRegistry are initialized with the lockbox.
@@ -19,10 +28,17 @@ design below:
   `ctsHash`). A later stage that gets different values reverts with
   `RSKOPCMSplitter_InputMismatch`, so step 4b and step 5 only act on the
   config step 2 validated.
-- `_assertValidFullConfig` follows upstream's v9 rules with two RSK
+- `_assertValidFullConfig` follows upstream's 9.0.2 rules with two RSK
   divergences, both for PERMISSIONED_CANNON: it stays deployable although
-  v9 hard-wires SUPER_ROOT_GAMES_MIGRATION on, and it may carry a zero init
-  bond (PAYROLLUP-191).
+  9.0.2 hard-wires SUPER_ROOT_GAMES_MIGRATION on (and is then the only game
+  an initial deployment may enable), and it may carry a zero init bond
+  (PAYROLLUP-191). The type-5 tickets (PAYROLLUP-16) widen the first rule on
+  purpose.
+- Audit coverage: OPCM 9.0.2, AnchorStateRegistry 4.0.0, DelayedWETH 2.0.0
+  and ETHLockbox 2.0.0 are in no `op-contracts` release, so no upstream audit
+  covers them (the game contracts match `op-contracts/v8.0.0`). Pinning the
+  contracts to a release tag is tracked in
+  [PAYROLLUP-396](https://rsklabs.atlassian.net/browse/PAYROLLUP-396).
 
 ## Status (2026-05-04)
 

@@ -82,8 +82,8 @@ extract the addresses you need to feed into the next step.
 
 | # | Script | Package | Tx count | Output |
 |---|---|---|---|---|
-| 1 | `DeploySuperchain.run` | contracts-bedrock | ~3 | SuperchainConfig, SuperchainProxyAdmin |
-| 2 | `DeployImplementations.runWithBytes` | contracts-bedrock | ~16 | All impls + `OPCMv2` |
+| 1 | `DeploySuperchain.run` | contracts-bedrock | 5 | SuperchainConfig, SuperchainProxyAdmin |
+| 2 | `DeployImplementations.runWithBytes` | contracts-bedrock | 29 | All impls + `OPCMv2` |
 | 3 | `RSKDeployOPChain.runSplit` | contracts-rootstock (this) | **8** | All proxies + dispute games |
 | 4 | `L2GenesisDump.runWithDump` (you write a wrapper) | contracts-bedrock | 0 (off-chain) | `l2-allocs.json` |
 
@@ -326,22 +326,26 @@ forge script script/RSKDeployOPChain.s.sol:RSKDeployOPChain \
 
 This emits **8 broadcasts** from this Forge invocation:
 
-| # | Function | Approx. padded gas |
-|---|---|---|
-| 1 | `CREATE` `RSKOPCMSplitter` | 4.7 M |
-| 2 | `deployStep1a_coreProxies` | 3.9 M |
-| 3 | `deployStep1b_remainingProxies` | 4.3 M |
-| 4 | `step2_systemConfigAndPortal` | 1.1 M |
-| 5 | `step3_messengerAndBridges` | 0.9 M |
-| 6 | `step4a_disputeFactoryAndWeth` | 0.4 M |
-| 7 | `step4b_anchorAndGames` | 0.7 M |
-| 8 | `step5_finalize` | 0.1 M |
+| # | Function | Gas used | Gas limit sent |
+|---|---|---|---|
+| 1 | `CREATE` `RSKOPCMSplitter` | 4.59 M | 5.04 M |
+| 2 | `deployStep1a_coreProxies` | 3.26 M | 3.81 M |
+| 3 | `deployStep1b_remainingProxies` | 3.50 M | 4.33 M |
+| 4 | `step2_systemConfigAndPortal` | 1.04 M | 1.29 M |
+| 5 | `step3_messengerAndBridges` | 0.81 M | 0.94 M |
+| 6 | `step4a_disputeFactoryAndWeth` | 0.36 M | 0.42 M |
+| 7 | `step4b_anchorAndGames` | 0.63 M | 0.74 M |
+| 8 | `step5_finalize` | 0.09 M | 0.10 M |
 
-All comfortably under the 6.8 M RSKIP144 sublist cap. These figures were
-measured before the op-node/v1.19.9 sync. Since then step 2 also enables the
-ETH_LOCKBOX feature and migrates the portal's liquidity, and step 4b clears
-SUPER_CANNON; `forge test` on the Ethereum gas schedule puts the largest stage
-(1b) at ~3.7 M padded.
+Measured on 2026-10-21 with the command above, against a local anvil node
+(Ethereum gas schedule) that already had steps 1 and 2. "Gas used" is
+the receipt's `gasUsed`; "Gas limit sent" is the limit forge put on the
+transaction (its estimate × 1.1, from `--gas-estimate-multiplier 110`), which
+is what RSKj checks against the 6.8 M RSKIP144 sublist cap. RSKj's gas
+schedule differs from Ethereum's, so rootstack's `verify-regtest` is the
+check that counts; `forge test --gas-report` on
+`test_lifecycle_advancesThroughAllPhasesAndSeals` gives the same "Gas used"
+figures without a node.
 
 The broadcast file will be at
 `broadcast/RSKDeployOPChain.s.sol/$L1_CHAIN_ID/runSplit-latest.json`.
@@ -380,7 +384,7 @@ contract L2GenesisDump is L2Genesis {
 }
 ```
 
-The Input tuple is large (32 fields). The minimum non-zero values for an
+The Input tuple is large (29 fields). The minimum non-zero values for an
 RSK regtest are below; anything not mentioned can be `address(0)`, `0`,
 or `false`:
 
@@ -405,26 +409,29 @@ struct Input {
     uint256 operatorFeeVaultMinimumWithdrawalAmount;
     uint256 operatorFeeVaultWithdrawalNetwork;
     address governanceTokenOwner;
-    uint256 fork;                                       // 8 = Holocene
+    uint256 fork;                                       // 7 = Jovian (the `Fork` enum
+                                                        // in scripts/libraries/Config.sol)
     bool    enableGovernance;                           // false
     bool    fundDevAccounts;                            // true on regtest
-    bool    useRevenueShare;                            // false
-    address chainFeesRecipient;
-    address l1FeesDepositor;
     bool    useCustomGasToken;                          // false
     bool    useInterop;                                 // false
     string  gasPayingTokenName;                         // ""
     string  gasPayingTokenSymbol;                       // ""
     uint256 nativeAssetLiquidityAmount;                 // 0
     address liquidityControllerOwner;
-    bytes32 devFeatureBitmap;                           // 0x0
+    bytes32 devFeatureBitmap;                           // 32 zero bytes
 }
 ```
 
+`fork` is an index into the `Fork` enum, not a hardfork name, and the enum
+grows at the end: at op-node/v1.19.9, 7 is JOVIAN (what rootstack runs) and 8
+is KARST. Re-check the enum when you sync a new release.
+
 **Note:** the `Input` struct has historically drifted between OP Stack
 release tags (`deployCrossL2Inbox` was removed, `useInterop` and
-`devFeatureBitmap` were added on `op-batcher/v1.16.7`). If you regenerate
-this from a different release, re-grep `struct Input` in
+`devFeatureBitmap` were added on `op-batcher/v1.16.7`, and `useRevenueShare`,
+`chainFeesRecipient` and `l1FeesDepositor` were removed by op-node/v1.19.9).
+If you regenerate this from a different release, re-grep `struct Input` in
 `scripts/L2Genesis.s.sol` and re-derive the tuple signature.
 
 Run **without** `--broadcast` (state dump runs locally):
@@ -433,8 +440,8 @@ Run **without** `--broadcast` (state dump runs locally):
 cd optimism/packages/contracts-bedrock
 
 forge script scripts/L2GenesisDump.s.sol:L2GenesisDump \
-  --sig 'runWithDump((uint256,uint256,address,address,address,address,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,bool,bool,bool,address,address,bool,bool,string,string,uint256,address,bytes32),string)' \
-  "($L1_CHAIN_ID,$L2_CHAIN_ID,$L1_CROSS_DOMAIN_MESSENGER_PROXY,$L1_STANDARD_BRIDGE_PROXY,$L1_ERC721_BRIDGE_PROXY,$DEPLOYER,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,8,false,true,false,$DEPLOYER,$DEPLOYER,false,false,\"\",\"\",0,$DEPLOYER,0x0)" \
+  --sig 'runWithDump((uint256,uint256,address,address,address,address,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,bool,bool,bool,bool,string,string,uint256,address,bytes32),string)' \
+  "($L1_CHAIN_ID,$L2_CHAIN_ID,$L1_CROSS_DOMAIN_MESSENGER_PROXY,$L1_STANDARD_BRIDGE_PROXY,$L1_ERC721_BRIDGE_PROXY,$DEPLOYER,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,7,false,true,false,false,\"\",\"\",0,$DEPLOYER,0x0000000000000000000000000000000000000000000000000000000000000000)" \
   "$(pwd)/../../../l2-allocs.json" \
   -vvvv
 ```
