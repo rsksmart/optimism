@@ -1,8 +1,9 @@
 # Enforce the PR template checkboxes. A PR cannot merge while any box of the
 # template is missing from the PR body or unticked: the author's "Before you open
 # this", the reviewer's "For the reviewer" and the merger's "For the merger". The
-# check reads the box state in the PR body, not who ticked it. (Only rsk/**
-# bases; the develop/main upstream mirrors are intentionally excluded.)
+# check reads the raw text of the PR body, not who ticked a box or how the page
+# renders it, so a ticked box inside a code fence or an HTML comment still counts.
+# (Only rsk/** bases; the develop/main upstream mirrors are intentionally excluded.)
 #
 # Ticking a box edits the body, which fires `edited` and re-runs the check.
 # Drafts skip it, so the gate applies once the PR is ready for review.
@@ -42,80 +43,22 @@ jobs:
 
           # Read from the base branch, so a PR cannot drop a box by editing the
           # template it is checked against.
-          template=$(gh api -H 'Accept: application/vnd.github.raw' \
-            "repos/$GITHUB_REPOSITORY/contents/.github/PULL_REQUEST_TEMPLATE.md?ref=$BASE_SHA")
+          gh api -H 'Accept: application/vnd.github.raw' \
+            "repos/$GITHUB_REPOSITORY/contents/.github/PULL_REQUEST_TEMPLATE.md?ref=$BASE_SHA" \
+            >"$RUNNER_TEMP/template.md"
 
-          # One line per box: heading, open or ticked, text. The \r strip covers
-          # CRLF bodies edited in a browser. Boxes in an HTML comment or a code
-          # fence do not render, so they do not count. A fence closes only with
-          # its own character, at least as long and with nothing after it, as
-          # in CommonMark, so a shorter or other fence inside it does not end it.
-          boxes() {
-            awk '
-              { sub(/[ \t\r]+$/, "") }
-              incomment { if (index($0, "-->")) incomment = 0; next }
-              {
-                fence = ""
-                if (match($0, /^ ? ? ?(```+|~~~+)/)) {
-                  fence = substr($0, RSTART, RLENGTH)
-                  sub(/^ +/, "", fence)
-                }
-              }
-              infence != "" {
-                if (fence != "" && substr(fence, 1, 1) == substr(infence, 1, 1) &&
-                    length(fence) >= length(infence) && substr($0, RSTART + RLENGTH) == "")
-                  infence = ""
-                next
-              }
-              fence != "" { infence = fence; next }
-              /^[[:space:]]*<!--/ && !index($0, "-->") { incomment = 1; next }
-              /^##? / { heading = $0; next }
-              heading != "" && match($0, /^[[:space:]]*([-*+]|[0-9]+[.)]) \[[ xX]\]([[:space:]]|$)/) {
-                box = substr($0, RSTART, RLENGTH)
-                text = substr($0, RSTART + RLENGTH)
-                sub(/^[[:space:]]+/, "", text)
-                # Indented 4 or more (a tab counts 4), a line can render as a
-                # code block. The template boxes are top-level, so such a
-                # ticked box never stands for one; an open one still blocks.
-                match($0, /^[ \t]*/)
-                indent = substr($0, 1, RLENGTH)
-                gsub(/\t/, "    ", indent)
-                state = box ~ /\[ \]/ ? "open" : (length(indent) < 4 ? "ticked" : "deep")
-                print heading "\t" state "\t" text
-              }
-            '
-          }
-
-          want=$(boxes <<<"$template" | cut -f1,3)
-          if [ -z "$want" ]; then
-            echo "::error::the template on the base branch has no checkboxes"
-            exit 1
-          fi
-          have=$(boxes <<<"$PR_BODY")
-
-          status=0
-          while IFS=$'\t' read -r heading text; do
-            if ! grep -qFx -e "$heading"$'\t'ticked$'\t'"$text" <<<"$have"; then
-              echo "::error::missing or unticked in '$heading': $text"
-              status=1
-            fi
-          done <<<"$want"
-
-          # Every other open box in a template section blocks too: one someone
-          # added, or an unticked copy of a template box that is ticked elsewhere.
-          # An unticked template box with no ticked copy is reported above.
-          headings=$(cut -f1 <<<"$want" | sort -u)
-          while IFS=$'\t' read -r heading state text; do
-            if [ "$state" = open ] && grep -qFx -e "$heading" <<<"$headings"; then
-              if ! grep -qFx -e "$heading"$'\t'"$text" <<<"$want" ||
-                grep -qFx -e "$heading"$'\t'ticked$'\t'"$text" <<<"$have"; then
-                echo "::error::unticked in '$heading': $text"
-                status=1
-              fi
-            fi
-          done <<<"$have"
-
-          if [ "$status" -eq 0 ]; then
-            echo "ok: every template checkbox is ticked"
-          fi
-          exit "$status"
+          # Every template box must appear ticked in the body with the same text,
+          # and any unticked box in the body blocks. The \r strip covers CRLF
+          # bodies edited in a browser.
+          awk '
+            { sub(/[ \t\r]+$/, "") }
+            NR == FNR { if (sub(/^- \[ \] /, "")) { want[$0] = 1; n++ }; next }
+            sub(/^- \[[xX]\] /, "") { delete want[$0]; next }
+            sub(/^[ \t]*[-*+] \[ \][ \t]*/, "") { print "::error::unticked: " $0; open[$0] = bad = 1; next }
+            END {
+              if (!n) { print "::error::the template on the base branch has no checkboxes"; exit 1 }
+              for (t in want) if (!(t in open)) { print "::error::missing: " t; bad = 1 }
+              if (!bad) print "ok: every template checkbox is ticked"
+              exit bad
+            }
+          ' "$RUNNER_TEMP/template.md" - <<<"$PR_BODY"
