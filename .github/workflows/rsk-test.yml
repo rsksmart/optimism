@@ -132,8 +132,8 @@ jobs:
   #
   # op-deployer bootstrap, manage, opcm, pipeline, verify and integration_test
   # are EXCLUDED here and not run by rsk-contracts-test.yml either: they need
-  # forge-artifacts or the synced superchain registry, so covering them means
-  # a Foundry-enabled job (PAYROLLUP-132).
+  # forge-artifacts, so covering them means a Foundry-enabled job
+  # (PAYROLLUP-132).
   #
   # For the same reason, the op-deployer root package's prepare/continue tests
   # that load forge-artifacts (artifacts.tzst, L2Genesis, MockSP1Verifier) are
