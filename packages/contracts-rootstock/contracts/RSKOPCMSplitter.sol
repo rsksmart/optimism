@@ -21,6 +21,13 @@ pragma solidity 0.8.15;
 //     `OPContractsManagerV2.sol` (op-contracts v9, op-node/v1.19.9) and split
 //     into stage methods. Each stage's body is a contiguous slice of
 //     upstream's straight-line code; nothing is reordered.
+//   * Every stage gets the same inputs. Upstream's `deploy` is one call, so
+//     `_apply` acts on the config it validated. Split into transactions,
+//     each stage takes `_cfg` and `_cts` from the caller again, so step 1a
+//     pins `keccak256(abi.encode(_cfg))` and step 1b
+//     `keccak256(abi.encode(cts))`, and every later stage must pass the same
+//     values. Without the pins, step 4b and step 5 would act on values step 2
+//     never validated.
 //   * Two deliberate divergences in `_assertValidFullConfig`, both about
 //     PERMISSIONED_CANNON (the output-root permissioned game RSK deploys):
 //     - an initial deployment may enable it although op-contracts v9
@@ -152,6 +159,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     error RSKOPCMSplitter_CannotUpgradeToCustomGasToken();
     error RSKOPCMSplitter_InvalidEthLockbox();
     error RSKOPCMSplitter_ZeroGameImplementation(GameType _gameType);
+    error RSKOPCMSplitter_InputMismatch();
 
     // -----------------------------------------------------------------------
     // Immutables
@@ -200,6 +208,14 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     /// @notice True when the active session is an initial deployment (gates
     ///         terminal ownership transfers in step5). False on upgrades.
     bool public isInitialDeployment;
+
+    /// @notice keccak256 of the `FullConfig` passed to step 1a. Every later
+    ///         stage must pass the same config.
+    bytes32 public cfgHash;
+
+    /// @notice keccak256 of the `ChainContracts` returned by step 1b. Every
+    ///         later stage must pass the same struct.
+    bytes32 public ctsHash;
 
     // -----------------------------------------------------------------------
     // Construction
@@ -270,6 +286,18 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         if (phase == 255) revert RSKOPCMSplitter_AlreadySealed();
     }
 
+    /// @dev Reverts unless `_cfg` is the config step 1a pinned.
+    function _checkConfig(FullConfig memory _cfg) internal view {
+        if (keccak256(abi.encode(_cfg)) != cfgHash) revert RSKOPCMSplitter_InputMismatch();
+    }
+
+    /// @dev Reverts unless `_cfg` is the config step 1a pinned and `_cts` the
+    ///      contracts step 1b returned.
+    function _checkInputs(FullConfig memory _cfg, ChainContracts memory _cts) internal view {
+        _checkConfig(_cfg);
+        if (keccak256(abi.encode(_cts)) != ctsHash) revert RSKOPCMSplitter_InputMismatch();
+    }
+
     // =======================================================================
     // INITIAL DEPLOY — split version of OPCMv2.deploy(FullConfig)
     //
@@ -304,6 +332,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     {
         if (phase != 0) revert RSKOPCMSplitter_AlreadyStarted();
         isInitialDeployment = true;
+        cfgHash = keccak256(abi.encode(_cfg));
 
         // Mirror OPCMv2.deploy lines 207-220 (saltMixer + ALL-permit).
         string memory saltMixer = string(bytes.concat(bytes20(deployer), bytes(_cfg.saltMixer)));
@@ -330,6 +359,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         returns (ChainContracts memory cts)
     {
         if (phase != 1) revert RSKOPCMSplitter_NotStarted();
+        _checkConfig(_cfg);
 
         // Re-derive saltMixer + ALL-permit just like step1a, so the same
         // CREATE2 addresses computed during step1a continue to be honoured
@@ -343,6 +373,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         });
 
         cts = _loadRemainingProxies(_core, _cfg.l2ChainId, saltMixer, instructions);
+        ctsHash = keccak256(abi.encode(cts));
         phase = 2;
         return cts;
     }
@@ -354,7 +385,8 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     // contract (deployed from the same out-of-tree package) when the first
     // upgrade or migrate scenario is exercised on RSK. The existing splitter
     // logic for steps 2-5 is shared between both flows, so factoring out
-    // is a mechanical lift.
+    // is a mechanical lift. Its first stage must set `cfgHash` and `ctsHash`
+    // too, or steps 2-5 revert.
     //
     // Tracked as F1.1 in RSK_COMPATIBILITY_BLOCKERS.md.
 
@@ -362,6 +394,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///         migration. Mirror of `OPCMv2._apply` lines 818-904.
     function step2_systemConfigAndPortal(FullConfig memory _cfg, ChainContracts memory _cts) external onlyDeployer {
         if (phase != 2) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         // Lines 818-819
         _assertValidFullConfig(_cfg, isInitialDeployment);
@@ -448,11 +481,12 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
     /// @notice Stage 3: LCDM + bridges + OptimismMintableERC20Factory. Mirror
     ///         of `OPCMv2._apply` lines 906-939.
-    function step3_messengerAndBridges(FullConfig memory /* _cfg */, ChainContracts memory _cts)
+    function step3_messengerAndBridges(FullConfig memory _cfg, ChainContracts memory _cts)
         external
         onlyDeployer
     {
         if (phase != 3) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
@@ -495,11 +529,12 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
     /// @notice Stage 4a: DisputeGameFactory + DelayedWETH. Mirror of
     ///         `OPCMv2._apply` lines 941-955 — first half of stage 4.
-    function step4a_disputeFactoryAndWeth(FullConfig memory /* _cfg */, ChainContracts memory _cts)
+    function step4a_disputeFactoryAndWeth(FullConfig memory _cfg, ChainContracts memory _cts)
         external
         onlyDeployer
     {
         if (phase != 4) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
@@ -527,6 +562,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///         `OPCMv2._apply` lines 957-1018 — second half of stage 4.
     function step4b_anchorAndGames(FullConfig memory _cfg, ChainContracts memory _cts) external onlyDeployer {
         if (phase != 5) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
@@ -582,6 +618,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///         Mirror of `OPCMv2._apply` lines 1019-1032. Seals the splitter.
     function step5_finalize(FullConfig memory _cfg, ChainContracts memory _cts) external onlyDeployer {
         if (phase != 6) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         // Lines 1019-1032. On upgrade we skip the terminal transfers entirely
         // (matches upstream's `if (_isInitialDeployment) { ... }`).

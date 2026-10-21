@@ -210,6 +210,8 @@ abstract contract RSKOPCTestBase is Test {
         });
     }
 
+    /// @dev Step 1a pins `fullConfig`, so a test that changes it does so before
+    ///      calling this.
     function _startAtStep2() internal {
         core = splitter.deployStep1a_coreProxies(fullConfig);
         chainContracts = splitter.deployStep1b_remainingProxies(fullConfig, core);

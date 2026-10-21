@@ -15,6 +15,10 @@ design below:
 - The ETHLockbox is mandatory: step 2 enables the feature, initializes the
   portal and the lockbox with it, and migrates the portal's liquidity.
   DelayedWETH and the AnchorStateRegistry are initialized with the lockbox.
+- Step 1a pins the config and step 1b the chain contracts (`cfgHash`,
+  `ctsHash`). A later stage that gets different values reverts with
+  `RSKOPCMSplitter_InputMismatch`, so step 4b and step 5 only act on the
+  config step 2 validated.
 - `_assertValidFullConfig` follows upstream's v9 rules with two RSK
   divergences, both for PERMISSIONED_CANNON: it stays deployable although
   v9 hard-wires SUPER_ROOT_GAMES_MIGRATION on, and it may carry a zero init
