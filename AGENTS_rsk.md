@@ -124,11 +124,12 @@ Run a package's RSK tests with, e.g.:
 | `op-node/rollup/derive/l1_traversal.go` | reorg-aware receipt-fetch `NotFound` handling | `l1_traversal_rsk_test.go` |
 | `op-node/rollup/derive/l1_block_info.go` | nil L1 `BaseFee` ⇒ 0 (no panic) | `l1_block_info_rsk_test.go` |
 | `op-service/sources/{eth_client,receipts_rpc,types}.go` | pluggable block / header / receipts / tx-hash hooks | `eth_client_rsk_test.go` |
+| `op-service/sources/eth_client.go` | by-number / by-label accessors keep the RPC-reported hash (`HeaderBlockInfoTrusted`, RSKIP-92) | `eth_client_rsk_test.go` |
 | `op-deployer/pkg/deployer/broadcaster` | `TxMgrConfigHook` on `KeyedBroadcasterOpts` | `keyed_rsk_test.go` |
 | `op-deployer/pkg/deployer/forge` | `ExtraScriptOpts` on `Client` | `client_rsk_test.go` |
-| `op-proposer/contracts/disputegamefactory.go` | skip games whose factory entry or metadata getters can't be loaded; surface ctx errors | `disputegamefactory_rsk_test.go` |
 | `op-proposer/contracts/disputegamefactory.go` | `GameExists` factory-slot lookup (`games()`) | `disputegamefactory_rsk_test.go` |
 | `op-proposer/proposer/driver.go` | skip proposing when the factory slot is taken | `driver_rsk_test.go` |
+| `op-batcher/batcher/driver.go` | optional `DriverSetup.TxGasLimit` hook replaces upstream's Amsterdam-aware `maxFloorDataGas` (nil keeps it) | `driver_rsk_test.go` |
 
 When you add a new RSK divergence, add a row here and an `_rsk_test.go` beside
 the code.
@@ -143,8 +144,8 @@ the code.
   gitignored `superchain-configs.zip`, built from the `superchain-registry`
   submodule, so on a fresh checkout every package that imports it (op-node
   included) fails to load — build, vet, lint and test alike. Not
-  `just sync-superchain`: that one bumps the registry and also rebuilds the
-  Rust artifacts. Then run `go build ./...`, `go vet ./...` and
+  `just sync-superchain`: that one rewrites the committed `.sha256` and
+  rebuilds the Rust artifacts with cargo. Then run `go build ./...`, `go vet ./...` and
   `just lint-go`, plus `./linter/bin/op-golangci-lint fmt` to apply
   formatting. `just lint-go` also runs `go mod tidy -diff`, which CI does not:
   it is stricter than the gate, not a substitute for it. Both lint commands

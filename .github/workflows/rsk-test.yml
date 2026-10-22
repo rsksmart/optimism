@@ -125,15 +125,15 @@ jobs:
   # That job exists separately, in rsk-contracts-test.yml.
   #
   # TestLastStepCacheAccuracy is skipped: it needs gitignored cannon artifacts
-  # (`cd cannon && make cannon elf`), and it only exercises cannon step caching,
-  # so it runs no txmgr/sources code. Its package does depend on both, through
-  # op-program/host/kvstore, so do not read the skip as "no RSK code here"
-  # (PAYROLLUP-132).
+  # (`cd cannon && just cannon diff-hello-elf`), and it only exercises cannon
+  # step caching, so it runs no txmgr/sources code. Its package does depend on
+  # both, through op-program/host/kvstore, so do not read the skip as "no RSK
+  # code here" (PAYROLLUP-132).
   #
   # op-deployer bootstrap, manage, opcm, pipeline, verify and integration_test
   # are EXCLUDED here and not run by rsk-contracts-test.yml either: they need
-  # forge-artifacts or the synced superchain registry, so covering them means
-  # a Foundry-enabled job (PAYROLLUP-132).
+  # forge-artifacts, so covering them means a Foundry-enabled job
+  # (PAYROLLUP-132).
   #
   # For the same reason, the op-deployer root package's prepare/continue tests
   # that load forge-artifacts (artifacts.tzst, L2Genesis, MockSP1Verifier) are

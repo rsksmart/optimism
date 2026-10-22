@@ -96,6 +96,12 @@ type DriverSetup struct {
 	ChannelConfig     ChannelConfigProvider
 	AltDA             *altda.DAClient
 	ChannelOutFactory ChannelOutFactory
+	// TxGasLimit, if non-nil, replaces maxFloorDataGas as the gas limit of each
+	// batcher tx; returning 0 leaves the limit to the txmgr's gas estimate.
+	// Non-Ethereum L1s (e.g. RSK) set it: they charge neither calldata floor, so
+	// upstream's limit can exceed RSKj's per-tx gas cap, or fall below RSK's
+	// 68 gas per non-zero byte before RSKIP400.
+	TxGasLimit TxGasLimitFn
 }
 
 // BatchSubmitter encapsulates a service responsible for submitting L2 tx
@@ -1020,7 +1026,11 @@ type TxSender[T any] interface {
 // sendTx uses the txmgr queue to send the given transaction candidate after setting its
 // gaslimit. It will block if the txmgr queue has reached its MaxPendingTransactions limit.
 func (l *BatchSubmitter) sendTx(txdata txData, isCancel bool, candidate *txmgr.TxCandidate, queue TxSender[txRef], receiptsCh chan txmgr.TxReceipt[txRef]) {
-	gasLimit, err := maxFloorDataGas(candidate.TxData)
+	gasLimitFn := maxFloorDataGas
+	if l.TxGasLimit != nil {
+		gasLimitFn = l.TxGasLimit
+	}
+	gasLimit, err := gasLimitFn(candidate.TxData)
 	if err != nil {
 		// We log instead of returning an error here because the txmgr will do its own gas estimation.
 		l.Log.Warn("Failed to calculate batch transaction gas limit", "err", err)
@@ -1030,6 +1040,10 @@ func (l *BatchSubmitter) sendTx(txdata txData, isCancel bool, candidate *txmgr.T
 
 	queue.Send(txRef{id: txdata.ID(), isCancel: isCancel, isBlob: txdata.asBlob}, *candidate, receiptsCh)
 }
+
+// TxGasLimitFn returns the gas limit of a batcher tx carrying txData. See
+// DriverSetup.TxGasLimit.
+type TxGasLimitFn func(txData []byte) (uint64, error)
 
 const (
 	amsterdamTxBaseGas               = uint64(12_000 + 3_000) // EIP-2780: TX_BASE_COST + COLD_ACCOUNT_ACCESS

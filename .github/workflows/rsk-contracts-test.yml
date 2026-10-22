@@ -52,16 +52,16 @@ jobs:
       # SHA-pinned for supply-chain safety (same pin as rsk-test.yml).
       #
       # Submodules are NOT fetched by checkout: `submodules: recursive` here
-      # would also clone the two repo-root submodules (op-rbuilder,
-      # rollup-boost — unrelated Rust builders) that nothing in this job needs.
-      # The scoped init below fetches exactly the Solidity libs.
+      # would also clone the repo-root superchain-registry submodule, which
+      # nothing in this job needs. The scoped init below fetches exactly the
+      # Solidity libs.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      # 11 submodules live under packages/contracts-bedrock/lib
-      # (`git submodule status packages/contracts-bedrock | wc -l` => 11); the
-      # foundry.toml remappings point into 10 of them. --recursive additionally
+      # 9 submodules live under packages/contracts-bedrock/lib
+      # (`git submodule status packages/contracts-bedrock | wc -l` => 9), and
+      # the foundry.toml remappings point into all of them. --recursive additionally
       # initialises the nested ones (solady + solmate -> ds-test, lib-keccak ->
       # forge-std/solady, openzeppelin-contracts-v5 -> forge-std/erc4626-tests);
       # those are not referenced by our remappings, but recursion is cheap
