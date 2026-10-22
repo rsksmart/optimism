@@ -22,18 +22,22 @@ pragma solidity 0.8.15;
 //     op-node/v1.19.9; there is no op-contracts/v9 release tag) and split
 //     into stage methods. Each stage's body is a contiguous slice of
 //     upstream's straight-line code; nothing is reordered.
-//   * The constructor takes the deployed OPCMv2 and reads its utils,
-//     container, validator and migrator, so the splitter cannot point at a
-//     different release. Step 2 records that OPCMv2, not the splitter, as
-//     the chain's `lastUsedOPCM`, as upstream does, so a stock OPCMv2 can
-//     later upgrade the chain.
+//   * The constructor takes the deployed OPCMv2, requires it to be version
+//     9.0.2 (the release these stages port), and reads its utils and
+//     container from it, so the inherited helpers and the stages act on that
+//     release. Step 2 records that OPCMv2, not the splitter, as the chain's
+//     `lastUsedOPCM`, as upstream does, so a stock OPCMv2 can later upgrade
+//     the chain. Its upgrade input has to give PERMISSIONED_CANNON a non-zero
+//     bond: a stock OPCMv2 rejects the zero bond allowed below.
 //   * Every stage gets the same inputs. Upstream's `deploy` is one call, so
 //     `_apply` acts on the config it validated. Split into transactions,
-//     each stage takes `_cfg` and `_cts` from the caller again, so step 1a
-//     pins `keccak256(abi.encode(_cfg))` and step 1b
-//     `keccak256(abi.encode(cts))`, and every later stage must pass the same
+//     each stage takes its inputs from the caller again. Step 1a validates
+//     the config and pins `keccak256(abi.encode(_cfg))` and
+//     `keccak256(abi.encode(core))`; step 1b re-pins the contracts as
+//     `keccak256(abi.encode(cts))`. Every later stage must pass the same
 //     values. Without the pins, step 4b and step 5 would act on values step 2
-//     never validated.
+//     never validated. Validating in step 1a means a config step 2 would
+//     reject is refused before any proxy exists.
 //   * Two deliberate divergences in `_assertValidFullConfig`, both about
 //     PERMISSIONED_CANNON (the output-root permissioned game RSK deploys):
 //     - an initial deployment may enable it although OPCMv2 9.0.2
@@ -83,9 +87,7 @@ import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
 import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
-import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
-import { IOPContractsManagerMigrator } from "interfaces/L1/opcm/IOPContractsManagerMigrator.sol";
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 
 contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
@@ -155,6 +157,10 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///         `OPContractsManagerV2.VALID_GAME_TYPES`.
     uint256 internal constant VALID_GAME_TYPES = 0x0000000a_00000009_00000005_00000008_00000001_00000000;
 
+    /// @notice The OPCMv2 version whose `_loadChainContracts` and `_apply` the
+    ///         stages port. An upstream sync that changes it must re-port them.
+    string internal constant MIRRORED_OPCM_VERSION = "9.0.2";
+
     // -----------------------------------------------------------------------
     // Errors
     // -----------------------------------------------------------------------
@@ -167,7 +173,10 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     error RSKOPCMSplitter_CannotUpgradeToCustomGasToken();
     error RSKOPCMSplitter_InvalidEthLockbox();
     error RSKOPCMSplitter_ZeroGameImplementation(GameType _gameType);
-    error RSKOPCMSplitter_InputMismatch();
+    error RSKOPCMSplitter_InvalidUpgradeSequence(string _lastVersion, string _thisVersion);
+    error RSKOPCMSplitter_UnsupportedOPCMVersion(string _version);
+    error RSKOPCMSplitter_ConfigMismatch();
+    error RSKOPCMSplitter_ContractsMismatch();
 
     // -----------------------------------------------------------------------
     // Immutables
@@ -175,7 +184,8 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
     /// @notice The OPCMv2 this splitter mirrors. Step 2 records it in
     ///         SystemConfig as the chain's last-used OPCM, as upstream records
-    ///         itself.
+    ///         itself. The upgrade and migrate paths (F1.1) can read its
+    ///         validator and migrator from it.
     IOPContractsManagerV2 public immutable opcmV2;
 
     /// @notice Container that holds the Implementations + Blueprints arrays.
@@ -185,12 +195,6 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     /// @notice The operator EOA that constructed this splitter. Only this
     ///         account may drive the stage methods.
     address public immutable deployer;
-
-    /// @notice Standard validator + migrator addresses of the OPCMv2 release.
-    ///         Neither is referenced here; the upgrade and migrate paths (F1.1)
-    ///         will need them.
-    IOPContractsManagerStandardValidator public immutable opcmStandardValidator;
-    IOPContractsManagerMigrator public immutable opcmMigrator;
 
     // -----------------------------------------------------------------------
     // Per-session state
@@ -227,24 +231,26 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///         stage must pass the same config.
     bytes32 public cfgHash;
 
-    /// @notice keccak256 of the `ChainContracts` returned by step 1b. Every
-    ///         later stage must pass the same struct.
+    /// @notice keccak256 of the contracts the next stage must get: the
+    ///         `ChainContractsCore` step 1a returned, then, from step 1b on,
+    ///         the `ChainContracts` step 1b returned.
     bytes32 public ctsHash;
 
     // -----------------------------------------------------------------------
     // Construction
     // -----------------------------------------------------------------------
 
-    /// @param _opcmV2 The deployed OPCMv2. Its utils, container, validator and
-    ///                migrator are read here, so the inherited helpers
-    ///                delegatecall into the same OPContractsManagerUtils and read
-    ///                the same Implementations + Blueprints as that OPCMv2.
+    /// @param _opcmV2 The deployed OPCMv2, which must be `MIRRORED_OPCM_VERSION`.
+    ///                Its utils and container are read here, so the inherited
+    ///                helpers delegatecall into the same OPContractsManagerUtils
+    ///                and read the same Implementations + Blueprints as that
+    ///                OPCMv2.
     constructor(IOPContractsManagerV2 _opcmV2) OPContractsManagerUtilsCaller(_opcmV2.opcmUtils()) {
+        string memory version = _opcmV2.version();
+        if (!SemverComp.eq(version, MIRRORED_OPCM_VERSION)) revert RSKOPCMSplitter_UnsupportedOPCMVersion(version);
         opcmV2 = _opcmV2;
         container = _opcmV2.contractsContainer();
         deployer = msg.sender;
-        opcmStandardValidator = _opcmV2.opcmStandardValidator();
-        opcmMigrator = _opcmV2.opcmMigrator();
     }
 
     // -----------------------------------------------------------------------
@@ -293,14 +299,28 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
     /// @dev Reverts unless `_cfg` is the config step 1a pinned.
     function _checkConfig(FullConfig memory _cfg) internal view {
-        if (keccak256(abi.encode(_cfg)) != cfgHash) revert RSKOPCMSplitter_InputMismatch();
+        if (keccak256(abi.encode(_cfg)) != cfgHash) revert RSKOPCMSplitter_ConfigMismatch();
+    }
+
+    /// @dev Reverts unless `_encodedContracts` are the contracts the previous
+    ///      stage pinned.
+    function _checkContracts(bytes memory _encodedContracts) internal view {
+        if (keccak256(_encodedContracts) != ctsHash) revert RSKOPCMSplitter_ContractsMismatch();
     }
 
     /// @dev Reverts unless `_cfg` is the config step 1a pinned and `_cts` the
     ///      contracts step 1b returned.
     function _checkInputs(FullConfig memory _cfg, ChainContracts memory _cts) internal view {
         _checkConfig(_cfg);
-        if (keccak256(abi.encode(_cts)) != ctsHash) revert RSKOPCMSplitter_InputMismatch();
+        _checkContracts(abi.encode(_cts));
+    }
+
+    /// @dev Upstream lines 824-827: the SuperchainConfig must be at least as
+    ///      new as this release's implementation.
+    function _assertSuperchainConfigUpToDate(ISuperchainConfig _superchainConfig, address _impl) internal view {
+        if (SemverComp.lt(_superchainConfig.version(), ISuperchainConfig(_impl).version())) {
+            revert RSKOPCMSplitter_SuperchainConfigNeedsUpgrade();
+        }
     }
 
     // =======================================================================
@@ -336,6 +356,11 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         returns (ChainContractsCore memory core)
     {
         if (phase != 0) revert RSKOPCMSplitter_AlreadyStarted();
+
+        // Run step 2's checks before pinning: once pinned, a config step 2
+        // rejects could not be replaced and the proxies would be stranded.
+        _assertValidFullConfig(_cfg, true);
+        _assertSuperchainConfigUpToDate(_cfg.superchainConfig, implementations().superchainConfigImpl);
         isInitialDeployment = true;
         cfgHash = keccak256(abi.encode(_cfg));
 
@@ -349,6 +374,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         });
 
         core = _loadCoreProxies(_cfg.l2ChainId, saltMixer, instructions);
+        ctsHash = keccak256(abi.encode(core));
         phase = 1;
         return core;
     }
@@ -365,6 +391,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     {
         if (phase != 1) revert RSKOPCMSplitter_NotStarted();
         _checkConfig(_cfg);
+        _checkContracts(abi.encode(_core));
 
         // Re-derive saltMixer + ALL-permit just like step1a, so the same
         // CREATE2 addresses computed during step1a continue to be honoured
@@ -390,8 +417,8 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     // contract (deployed from the same out-of-tree package) when the first
     // upgrade or migrate scenario is exercised on RSK. The existing splitter
     // logic for steps 2-5 is shared between both flows, so factoring out
-    // is a mechanical lift. Its first stage must set `cfgHash` and `ctsHash`
-    // too, or steps 2-5 revert.
+    // is a mechanical lift. Its first stage must validate the config and set
+    // `cfgHash` and `ctsHash` too, or steps 2-5 revert.
     //
     // Tracked as F1.1 in RSK_COMPATIBILITY_BLOCKERS.md.
 
@@ -401,26 +428,25 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         if (phase != 2) revert RSKOPCMSplitter_NotStarted();
         _checkInputs(_cfg, _cts);
 
-        // Lines 818-819
+        // Lines 818-819. Step 1a already ran this check and the one at lines
+        // 824-827 on the pinned config; they stay for the upgrade path (F1.1).
         _assertValidFullConfig(_cfg, isInitialDeployment);
 
         // Lines 821-822
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
         // Lines 824-827
-        if (SemverComp.lt(_cfg.superchainConfig.version(), ISuperchainConfig(impls.superchainConfigImpl).version())) {
-            revert RSKOPCMSplitter_SuperchainConfigNeedsUpgrade();
-        }
+        _assertSuperchainConfigUpToDate(_cfg.superchainConfig, impls.superchainConfigImpl);
 
-        // Lines 829-836 — the upgrade-sequence check only runs on upgrades,
-        // and this splitter only supports initial deployments (see the note
-        // above this stage). The upgrade path (F1.1) must run
-        // `_isPermittedUpgradeSequence(_cts.systemConfig, address(opcmV2))`
-        // here, before `_upgrade` overwrites `lastUsedOPCM`.
+        // Lines 829-836. Only upgrades run this check; until the upgrade path
+        // (F1.1) lands, `isInitialDeployment` is always true here.
+        if (!isInitialDeployment && !_isPermittedUpgradeSequence(_cts.systemConfig, address(opcmV2))) {
+            revert RSKOPCMSplitter_InvalidUpgradeSequence(_cts.systemConfig.lastUsedOPCMVersion(), opcmV2.version());
+        }
 
         // Lines 838-865 — SystemConfig. `opcm` is `opcmV2`, as upstream, so
         // `lastUsedOPCM` has a `version()` and a stock OPCMv2 can upgrade the
-        // chain.
+        // chain (with a non-zero PERMISSIONED_CANNON bond, see the header).
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.systemConfig),
@@ -639,8 +665,8 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
     // =======================================================================
     // MIGRATE — moved to RSKOPCMSplitterUpgrade (see note above stage 2). The
-    // constructor still reads the migrator from `opcmV2`, so the future
-    // sibling contract can read it from a deployed splitter if needed.
+    // future sibling contract can read the migrator through
+    // `opcmV2().opcmMigrator()`.
     // =======================================================================
 
     // =======================================================================
@@ -1129,7 +1155,9 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             // with no interop, so it keeps deploying PERMISSIONED_CANNON, the
             // output-root game OptimismPortal2 still proves withdrawals against.
             // With the flag on that is the only valid game: the super-root games
-            // are not, so a deployment never mixes the two families.
+            // are not, so a deployment never mixes the two families. The
+            // CANNON_KONA arm keeps upstream's flag-off case and stays
+            // unreachable until upstream stops hard-wiring the flag.
             bool validForInitialDeploy =
                 isPermissionedCannonGame || (!superRootGamesMigrationEnabled && isCannonKonaGame);
             if (_isInitialDeployment && _cfg.disputeGameConfigs[i].enabled && !validForInitialDeploy) {

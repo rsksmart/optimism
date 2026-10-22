@@ -148,8 +148,9 @@ contract RSKDeployOPChain is Script {
         RSKOPCMSplitter.FullConfig memory cfg = _toFullConfig(_input, _initBond);
 
         // ----------- BROADCAST 1 — deploy the splitter -----------
-        // The splitter reads its utils, container, validator and migrator from
-        // `opcmV2`, so its inherited helpers delegatecall into the same utils.
+        // The splitter checks `opcmV2`'s version and reads its utils and
+        // container from it, so its inherited helpers delegatecall into the
+        // same utils.
         vm.broadcast(msg.sender);
         RSKOPCMSplitter splitter = new RSKOPCMSplitter(opcmV2);
 

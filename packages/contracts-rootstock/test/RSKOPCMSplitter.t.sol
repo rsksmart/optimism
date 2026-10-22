@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
+import {stdStorage, StdStorage} from "forge-std/StdStorage.sol";
+
 import {IProxyAdmin} from "interfaces/universal/IProxyAdmin.sol";
 import {IETHLockbox} from "interfaces/L1/IETHLockbox.sol";
+import {IOptimismPortal2} from "interfaces/L1/IOptimismPortal2.sol";
+import {ISystemConfig} from "interfaces/L1/ISystemConfig.sol";
 import {IOPContractsManagerContainer} from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
 import {IOPContractsManagerUtils} from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import {IDelayedWETH} from "interfaces/dispute/IDelayedWETH.sol";
@@ -18,14 +22,14 @@ import {RSKOPCMSplitter_Harness} from "./helpers/RSKOPCMSplitterHarness.sol";
 import {RSKOPCTestBase} from "./helpers/RSKOPCTestBase.sol";
 
 contract RSKOPCMSplitter_Test is RSKOPCTestBase {
+    using stdStorage for StdStorage;
+
     function test_constructorAndGetters() public view {
         assertEq(address(splitter.opcmV2()), address(implementationsOutput.opcmV2));
         assertEq(address(splitter.opcmUtils()), address(implementationsOutput.opcmUtils));
         assertEq(address(splitter.container()), address(implementationsOutput.opcmContainer));
         assertEq(address(splitter.contractsContainer()), address(implementationsOutput.opcmContainer));
         assertEq(splitter.deployer(), address(this));
-        assertEq(address(splitter.opcmStandardValidator()), address(implementationsOutput.opcmStandardValidator));
-        assertEq(address(splitter.opcmMigrator()), address(implementationsOutput.opcmMigrator));
         assertEq(splitter.phase(), 0);
         assertFalse(splitter.isInitialDeployment());
         assertEq(splitter.cfgHash(), bytes32(0));
@@ -33,6 +37,20 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         assertEq(splitter.devFeatureBitmap(), bytes32(0));
         assertFalse(splitter.isDevFeatureEnabled(bytes32(uint256(1))));
         assertEq(address(splitter.implementations().systemConfigImpl), address(implementationsOutput.systemConfigImpl));
+    }
+
+    /// @notice The stages port OPCMv2 9.0.2, so the splitter refuses any other
+    ///         release rather than record it as the chain's last-used OPCM.
+    function test_constructor_otherOpcmVersion_reverts() public {
+        vm.mockCall(
+            address(implementationsOutput.opcmV2),
+            abi.encodeWithSignature("version()"),
+            abi.encode("10.0.0")
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(RSKOPCMSplitter.RSKOPCMSplitter_UnsupportedOPCMVersion.selector, "10.0.0")
+        );
+        new RSKOPCMSplitter(implementationsOutput.opcmV2);
     }
 
     /// @notice SystemConfig records the OPCMv2 the splitter mirrors, not the
@@ -107,6 +125,8 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         assertGt(address(core.proxyAdmin).code.length, 0);
         RSKOPCMSplitter.FullConfig memory cfg = fullConfig;
         assertEq(splitter.cfgHash(), keccak256(abi.encode(cfg)));
+        RSKOPCMSplitter.ChainContractsCore memory coreCopy = core;
+        assertEq(splitter.ctsHash(), keccak256(abi.encode(coreCopy)));
 
         chainContracts = splitter.deployStep1b_remainingProxies(fullConfig, core);
         assertEq(splitter.phase(), 2);
@@ -182,17 +202,17 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
 
     function test_invalidGameConfigs_length_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs.pop();
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     function test_invalidGameConfigs_order_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs[0].gameType = GameTypes.PERMISSIONED_CANNON;
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     function test_invalidGameConfigs_disabledBond_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs[0].initBond = 1;
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     /// @notice CANNON gets a bond, a prestate and a real anchor, so the
@@ -200,7 +220,7 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
     function test_invalidGameConfigs_nonPermissionedEnabled_revertsAndLeavesPhase() public {
         fullConfig.startingAnchorRoot = _realAnchor();
         _enableFaultGame(0);
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     /// @notice PERMISSIONED_CANNON is the only game an initial deployment may
@@ -209,29 +229,29 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
     function test_invalidGameConfigs_withSuperPermissioned_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs[3].enabled = true;
         fullConfig.disputeGameConfigs[3].gameArgs = fullConfig.disputeGameConfigs[1].gameArgs;
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     function test_invalidGameConfigs_withSuperCannonKona_revertsAndLeavesPhase() public {
         fullConfig.startingAnchorRoot = _realAnchor();
         _enableFaultGame(4);
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     function test_invalidGameConfigs_startingTypeDisabled_revertsAndLeavesPhase() public {
         fullConfig.disputeGameConfigs[1].enabled = false;
         fullConfig.disputeGameConfigs[1].initBond = 0;
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     function test_invalidGameConfigs_zeroAnchorRoot_revertsAndLeavesPhase() public {
         fullConfig.startingAnchorRoot = Proposal({root: Hash.wrap(bytes32(0)), l2SequenceNumber: 0});
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     function test_invalidGameConfigs_maxAnchorSequenceNumber_revertsAndLeavesPhase() public {
         fullConfig.startingAnchorRoot.l2SequenceNumber = type(uint64).max;
-        _assertStep2RejectsConfig();
+        _assertStep1aRejectsConfig();
     }
 
     /// @notice Every stage after 1a must get the config 1a pinned. The changed
@@ -243,32 +263,32 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
 
         core = splitter.deployStep1a_coreProxies(fullConfig);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ConfigMismatch.selector);
         splitter.deployStep1b_remainingProxies(changed, core);
         assertEq(splitter.phase(), 1);
         chainContracts = splitter.deployStep1b_remainingProxies(fullConfig, core);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ConfigMismatch.selector);
         splitter.step2_systemConfigAndPortal(changed, chainContracts);
         assertEq(splitter.phase(), 2);
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ConfigMismatch.selector);
         splitter.step3_messengerAndBridges(changed, chainContracts);
         assertEq(splitter.phase(), 3);
         splitter.step3_messengerAndBridges(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ConfigMismatch.selector);
         splitter.step4a_disputeFactoryAndWeth(changed, chainContracts);
         assertEq(splitter.phase(), 4);
         splitter.step4a_disputeFactoryAndWeth(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ConfigMismatch.selector);
         splitter.step4b_anchorAndGames(changed, chainContracts);
         assertEq(splitter.phase(), 5);
         splitter.step4b_anchorAndGames(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ConfigMismatch.selector);
         splitter.step5_finalize(changed, chainContracts);
         assertEq(splitter.phase(), 6);
         splitter.step5_finalize(fullConfig, chainContracts);
@@ -281,41 +301,119 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         RSKOPCMSplitter.ChainContracts memory changed = chainContracts;
         changed.delayedWETH = IDelayedWETH(payable(makeAddr("otherDelayedWETH")));
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ContractsMismatch.selector);
         splitter.step2_systemConfigAndPortal(fullConfig, changed);
         assertEq(splitter.phase(), 2);
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ContractsMismatch.selector);
         splitter.step3_messengerAndBridges(fullConfig, changed);
         assertEq(splitter.phase(), 3);
         splitter.step3_messengerAndBridges(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ContractsMismatch.selector);
         splitter.step4a_disputeFactoryAndWeth(fullConfig, changed);
         assertEq(splitter.phase(), 4);
         splitter.step4a_disputeFactoryAndWeth(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ContractsMismatch.selector);
         splitter.step4b_anchorAndGames(fullConfig, changed);
         assertEq(splitter.phase(), 5);
         splitter.step4b_anchorAndGames(fullConfig, chainContracts);
 
-        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InputMismatch.selector);
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ContractsMismatch.selector);
         splitter.step5_finalize(fullConfig, changed);
         assertEq(splitter.phase(), 6);
         splitter.step5_finalize(fullConfig, chainContracts);
         assertEq(splitter.phase(), 255);
     }
 
-    /// @notice `core` is not pinned, so a zero lockbox in step 1a's output still
-    ///         reaches step 2's guard instead of being masked by the pins.
-    function test_invalidEthLockbox_revertsAndLeavesPhase() public {
+    /// @notice Step 1b must get the core proxies step 1a returned, in the
+    ///         same fields: swapping two of them would deploy each
+    ///         implementation behind the other's proxy.
+    function test_inputMismatch_changedCore_revertsAndLeavesPhase() public {
         core = splitter.deployStep1a_coreProxies(fullConfig);
-        core.ethLockbox = IETHLockbox(address(0));
+        RSKOPCMSplitter.ChainContractsCore memory swapped = core;
+        swapped.optimismPortal = IOptimismPortal2(payable(address(core.ethLockbox)));
+        swapped.ethLockbox = IETHLockbox(address(core.optimismPortal));
+
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_ContractsMismatch.selector);
+        splitter.deployStep1b_remainingProxies(fullConfig, swapped);
+        assertEq(splitter.phase(), 1);
         chainContracts = splitter.deployStep1b_remainingProxies(fullConfig, core);
+        assertEq(splitter.phase(), 2);
+    }
+
+    /// @notice The pins keep a zero lockbox from reaching step 2 in a deploy,
+    ///         so the test pins one by hand to reach the guard.
+    function test_invalidEthLockbox_revertsAndLeavesPhase() public {
+        _startAtStep2();
+        chainContracts.ethLockbox = IETHLockbox(address(0));
+        RSKOPCMSplitter.ChainContracts memory cts = chainContracts;
+        stdstore.target(address(splitter)).sig("ctsHash()").checked_write(keccak256(abi.encode(cts)));
 
         vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidEthLockbox.selector);
+        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
+        assertEq(splitter.phase(), 2);
+    }
+
+    /// @notice A SuperchainConfig older than the release's implementation is
+    ///         refused by step 1a, before any proxy exists, and by step 2.
+    function test_outdatedSuperchainConfig_revertsAndLeavesPhase() public {
+        vm.mockCall(address(superchainConfig), abi.encodeWithSignature("version()"), abi.encode("0.0.1"));
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_SuperchainConfigNeedsUpgrade.selector);
+        splitter.deployStep1a_coreProxies(fullConfig);
+        assertEq(splitter.phase(), 0);
+
+        vm.clearMockedCalls();
+        _startAtStep2();
+        vm.mockCall(address(superchainConfig), abi.encodeWithSignature("version()"), abi.encode("0.0.1"));
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_SuperchainConfigNeedsUpgrade.selector);
+        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
+        assertEq(splitter.phase(), 2);
+    }
+
+    /// @notice Step 2 keeps upstream's config check (lines 818-819), which
+    ///         step 1a already ran on a deploy. Pinning an invalid config by
+    ///         hand shows step 2 still rejects it.
+    function test_step2_invalidPinnedConfig_revertsAndLeavesPhase() public {
+        _startAtStep2();
+        fullConfig.startingAnchorRoot = Proposal({root: Hash.wrap(bytes32(0)), l2SequenceNumber: 0});
+        RSKOPCMSplitter.FullConfig memory cfg = fullConfig;
+        stdstore.target(address(splitter)).sig("cfgHash()").checked_write(keccak256(abi.encode(cfg)));
+
+        vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
+        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
+        assertEq(splitter.phase(), 2);
+    }
+
+    /// @notice Upstream's upgrade-sequence check (lines 829-836) only runs on
+    ///         upgrades. The upgrade path is not here yet (F1.1), so the test
+    ///         clears `isInitialDeployment` by hand and mocks the check.
+    function test_step2_upgradeSequenceNotPermitted_revertsAndLeavesPhase() public {
+        _startAtStep2();
+        // phase (uint8) and isInitialDeployment (bool) share slot 0.
+        vm.store(address(splitter), bytes32(0), bytes32(uint256(2)));
+        assertEq(splitter.phase(), 2);
+        assertFalse(splitter.isInitialDeployment());
+
+        vm.mockCall(
+            address(implementationsOutput.opcmUtils),
+            abi.encodeCall(
+                IOPContractsManagerUtils.isPermittedUpgradeSequence,
+                (chainContracts.systemConfig, address(implementationsOutput.opcmV2))
+            ),
+            abi.encode(false)
+        );
+        vm.mockCall(
+            address(chainContracts.systemConfig),
+            abi.encodeCall(ISystemConfig.lastUsedOPCMVersion, ()),
+            abi.encode("7.0.0")
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(RSKOPCMSplitter.RSKOPCMSplitter_InvalidUpgradeSequence.selector, "7.0.0", "9.0.2")
+        );
         splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
         assertEq(splitter.phase(), 2);
     }
@@ -438,12 +536,12 @@ contract RSKOPCMSplitter_Test is RSKOPCTestBase {
         assertTrue(chainContracts.systemConfig.isCustomGasToken());
     }
 
-    /// @dev Step 1a pins `fullConfig`, so the caller changes it first.
-    function _assertStep2RejectsConfig() internal {
-        _startAtStep2();
+    /// @dev Step 1a runs step 2's checks before it pins the config or deploys
+    ///      a proxy, so an invalid config never leaves phase 0.
+    function _assertStep1aRejectsConfig() internal {
         vm.expectRevert(RSKOPCMSplitter.RSKOPCMSplitter_InvalidGameConfigs.selector);
-        splitter.step2_systemConfigAndPortal(fullConfig, chainContracts);
-        assertEq(splitter.phase(), 2);
+        splitter.deployStep1a_coreProxies(fullConfig);
+        assertEq(splitter.phase(), 0);
     }
 
     function _startAtStep4b() internal {
