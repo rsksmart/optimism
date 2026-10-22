@@ -328,13 +328,13 @@ This emits **8 broadcasts** from this Forge invocation:
 
 | # | Function | Gas used | Gas limit sent |
 |---|---|---|---|
-| 1 | `CREATE` `RSKOPCMSplitter` | 4.59 M | 5.04 M |
-| 2 | `deployStep1a_coreProxies` | 3.26 M | 3.81 M |
-| 3 | `deployStep1b_remainingProxies` | 3.50 M | 4.33 M |
-| 4 | `step2_systemConfigAndPortal` | 1.04 M | 1.29 M |
+| 1 | `CREATE` `RSKOPCMSplitter` | 4.78 M | 5.26 M |
+| 2 | `deployStep1a_coreProxies` | 3.36 M | 3.93 M |
+| 3 | `deployStep1b_remainingProxies` | 3.48 M | 4.07 M |
+| 4 | `step2_systemConfigAndPortal` | 1.04 M | 1.22 M |
 | 5 | `step3_messengerAndBridges` | 0.81 M | 0.94 M |
-| 6 | `step4a_disputeFactoryAndWeth` | 0.36 M | 0.42 M |
-| 7 | `step4b_anchorAndGames` | 0.63 M | 0.74 M |
+| 6 | `step4a_disputeFactoryAndWeth` | 0.36 M | 0.45 M |
+| 7 | `step4b_anchorAndGames` | 0.63 M | 0.78 M |
 | 8 | `step5_finalize` | 0.09 M | 0.10 M |
 
 Measured on 2026-10-21 with the command above, against a local anvil node
@@ -343,9 +343,9 @@ the receipt's `gasUsed`; "Gas limit sent" is the limit forge put on the
 transaction (its estimate × 1.1, from `--gas-estimate-multiplier 110`), which
 is what RSKj checks against the 6.8 M RSKIP144 sublist cap. RSKj's gas
 schedule differs from Ethereum's, so rootstack's `verify-regtest` is the
-check that counts; `forge test --gas-report` on
-`test_lifecycle_advancesThroughAllPhasesAndSeals` gives the same "Gas used"
-figures without a node.
+check that counts. Without a node, `forge test --gas-report` on
+`test_lifecycle_advancesThroughAllPhasesAndSeals` lands within a few hundred
+gas of the "Gas used" column.
 
 The broadcast file will be at
 `broadcast/RSKDeployOPChain.s.sol/$L1_CHAIN_ID/runSplit-latest.json`.

@@ -7,27 +7,32 @@ at op-node/v1.19.9. There is no `op-contracts/v9` release tag: the latest is
 `op-contracts/v8.0.0`. What changed against the design below:
 
 - Stages are 1a, 1b, 2, 3, 4a, 4b and 5 (stage 1 and 4 were split for gas).
-  `forge test --gas-report` (Ethereum gas schedule) measures every stage
-  under 3.6 M raw; the largest is 1b. DEPLOY.md has the per-stage table.
-- The splitter is 21,021 bytes deployed (3,555 bytes EIP-170 margin):
+  On the Ethereum gas schedule every stage uses under 3.5 M; the largest
+  transaction is the splitter's CREATE (4.8 M). DEPLOY.md has the per-stage
+  table.
+- The splitter is 21,783 bytes deployed (2,793 bytes EIP-170 margin):
   upstream moved the SystemConfig initializer encoding into
   `OPContractsManagerUtilsCaller._encodeSystemConfigInit`, and the interop
   branches left `_apply`.
-- The constructor takes the deployed OPCMv2 and reads its utils, container,
-  validator and migrator from it. Step 2 records that OPCMv2 as the chain's
-  `lastUsedOPCM`, as upstream does, so `lastUsedOPCMVersion()` and the
-  upgrade-sequence check a stock OPCMv2 runs before `upgrade` work on chains
-  the splitter deploys. Chains deployed before this change record the
-  splitter instead, which has no `version()`. The upgrade path (F1.1) must
-  run `_isPermittedUpgradeSequence` before step 2's `_upgrade` (noted inline
-  there).
+- The constructor takes the deployed OPCMv2, requires version 9.0.2 (the
+  release the stages port), and reads its utils and container from it.
+  Step 2 records that OPCMv2 as the chain's `lastUsedOPCM`, as upstream does,
+  so `lastUsedOPCMVersion()` and the upgrade-sequence check a stock OPCMv2
+  runs before `upgrade` work on chains the splitter deploys. That upgrade has
+  to give PERMISSIONED_CANNON a non-zero bond, since a stock OPCMv2 rejects
+  the zero bond RSK allows. Chains deployed before this change record the
+  splitter instead, which has no `version()`. Step 2 keeps upstream's
+  upgrade-sequence check; it only runs once the upgrade path (F1.1) exists.
 - The ETHLockbox is mandatory: step 2 enables the feature, initializes the
   portal and the lockbox with it, and migrates the portal's liquidity.
   DelayedWETH and the AnchorStateRegistry are initialized with the lockbox.
-- Step 1a pins the config and step 1b the chain contracts (`cfgHash`,
-  `ctsHash`). A later stage that gets different values reverts with
-  `RSKOPCMSplitter_InputMismatch`, so step 4b and step 5 only act on the
-  config step 2 validated.
+- Step 1a validates the config (the same checks as step 2) and pins it
+  (`cfgHash`) and the core proxies it deployed (`ctsHash`); step 1b re-pins
+  `ctsHash` to the full chain contracts. A later stage that gets a different
+  config reverts with `RSKOPCMSplitter_ConfigMismatch`, and one that gets
+  different contracts with `RSKOPCMSplitter_ContractsMismatch`, so step 4b
+  and step 5 only act on the config step 2 validated. Validating before the
+  pin means a bad config is refused before any proxy is deployed.
 - `_assertValidFullConfig` follows upstream's 9.0.2 rules with two RSK
   divergences, both for PERMISSIONED_CANNON: it stays deployable although
   9.0.2 hard-wires SUPER_ROOT_GAMES_MIGRATION on (and is then the only game
