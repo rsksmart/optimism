@@ -127,7 +127,6 @@ Run a package's RSK tests with, e.g.:
 | `op-service/sources/eth_client.go` | by-number / by-label accessors keep the RPC-reported hash (`HeaderBlockInfoTrusted`, RSKIP-92) | `eth_client_rsk_test.go` |
 | `op-deployer/pkg/deployer/broadcaster` | `TxMgrConfigHook` on `KeyedBroadcasterOpts` | `keyed_rsk_test.go` |
 | `op-deployer/pkg/deployer/forge` | `ExtraScriptOpts` on `Client` | `client_rsk_test.go` |
-| `op-proposer/contracts/disputegamefactory.go` | skip games whose metadata getters revert; return every other error (transport, ctx, empty result) | `disputegamefactory_rsk_test.go` |
 | `op-proposer/contracts/disputegamefactory.go` | `GameExists` factory-slot lookup (`games()`) | `disputegamefactory_rsk_test.go` |
 | `op-proposer/proposer/driver.go` | skip proposing when the factory slot is taken | `driver_rsk_test.go` |
 | `op-batcher/batcher/driver.go` | optional `DriverSetup.TxGasLimit` hook replaces upstream's Amsterdam-aware `maxFloorDataGas` (nil keeps it) | `driver_rsk_test.go` |

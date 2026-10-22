@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
@@ -95,17 +94,7 @@ func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer comm
 		if game.GameType == gameType {
 			metadata, err := f.loadGameMetadata(ctx, game.Address)
 			if err != nil {
-				// Skip a game whose getters revert (an old implementation that lacks
-				// them) so old games don't block the proposer. Any other error is
-				// returned: a flaky or lagging RPC must not hide our own recent game,
-				// or we would propose again before ProposalInterval.
-				if !rskIsRevert(err) {
-					return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to get metadata for dispute game %d: %w", idx, err)
-				}
-				if idx == 0 {
-					return false, time.Time{}, common.Hash{}, nil
-				}
-				continue
+				return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to get metadata for dispute game %d: %w", idx, err)
 			}
 			if metadata.Proposer == proposer {
 				// Found a matching proposal
@@ -117,34 +106,6 @@ func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer comm
 			return false, time.Time{}, common.Hash{}, nil
 		}
 	}
-}
-
-// rskIsRevert reports whether err is a reverted call: geth's "execution
-// reverted" or RSKj's "VM Exception while processing transaction". Transport,
-// node and context errors are not, nor is an empty result that fails to decode,
-// which is what a backend that hasn't seen the game yet returns. A joined error
-// counts only if every part does, as loadGameMetadata joins the getters' error
-// with the claimData(0) fallback's.
-//
-// It matches messages rather than geth's ErrorData(), which every JSON-RPC
-// error implements (a rate limit too).
-func rskIsRevert(err error) bool {
-	switch e := err.(type) {
-	case nil:
-		return false
-	case interface{ Unwrap() []error }:
-		errs := e.Unwrap()
-		for _, inner := range errs {
-			if !rskIsRevert(inner) {
-				return false
-			}
-		}
-		return len(errs) > 0
-	case interface{ Unwrap() error }:
-		return rskIsRevert(e.Unwrap())
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "execution reverted") || strings.Contains(msg, "vm exception")
 }
 
 // GameExists reports whether a game already occupies the factory slot for this
