@@ -11,8 +11,9 @@
 # Drafts skip it, so the gate applies once the PR is ready for review.
 name: rsk-pr-checklist
 
+# Run only this protected workflow, without checking out or executing PR code.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, synchronize, reopened, ready_for_review]
     branches: [rsk/**]
 
@@ -27,12 +28,6 @@ concurrency:
 
 jobs:
   checklist:
-    # A skipped job counts as passing for a required check, so drafts and
-    # Dependabot PRs are not blocked. Dependabot bodies carry their own
-    # checkboxes and never fill this template.
-    if: >-
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -40,14 +35,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          # Read the body from the API, never the event payload: a re-run
-          # replays the body of the original event. So a box unticked after an
-          # older run passed still blocks the merge.
-          PR_BODY=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')
+          # Re-runs replay the original event, so read the current draft state,
+          # body and base SHA together from the API.
+          pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
+          if [ "$(jq -r .draft <<<"$pr_json")" = true ] ||
+             [ "$(jq -r .user.login <<<"$pr_json")" = 'dependabot[bot]' ]; then
+            echo "ok: draft or Dependabot PR, no template to check"
+            exit 0
+          fi
+          PR_BODY=$(jq -r '.body // ""' <<<"$pr_json")
+          BASE_SHA=$(jq -r .base.sha <<<"$pr_json")
 
           # Read from the base branch, so a PR cannot drop a box by editing the
           # template it is checked against.
