@@ -19,13 +19,6 @@ type SuperchainContracts struct {
 	SuperchainProxyAdminImpl common.Address
 	SuperchainConfigProxy    common.Address
 	SuperchainConfigImpl     common.Address
-	// ProtocolVersionsProxy / ProtocolVersionsImpl are kept here so the
-	// op-deployer pipeline can pass the address from DeploySuperchain output
-	// to DeployImplementations input (Solidity scripts assert non-zero on
-	// these). Both fields are removed in PR 2 of #20309 alongside the
-	// Solidity script changes; nothing else reads them.
-	ProtocolVersionsProxy common.Address
-	ProtocolVersionsImpl  common.Address
 }
 
 // ImplementationsContracts struct contains all the implementation contracts for a superchain
@@ -53,6 +46,7 @@ type ImplementationsContracts struct {
 	PermissionedDisputeGameImpl      common.Address
 	ZkDisputeGameImpl                common.Address
 	StorageSetterImpl                common.Address
+	SP1PlonkAdapterImpl              common.Address
 	SuperFaultDisputeGameImpl        common.Address
 	SuperPermissionedDisputeGameImpl common.Address
 }
@@ -88,6 +82,8 @@ type OpChainFaultProofsContracts struct {
 	FaultDisputeGameImpl               common.Address
 	FaultDisputeGameCannonKonaImpl     common.Address
 	PermissionedDisputeGameImpl        common.Address
+	SuperFaultDisputeGameImpl          common.Address
+	SuperPermissionedDisputeGameImpl   common.Address
 	DelayedWethPermissionedGameProxy   common.Address
 	DelayedWethPermissionlessGameProxy common.Address
 }

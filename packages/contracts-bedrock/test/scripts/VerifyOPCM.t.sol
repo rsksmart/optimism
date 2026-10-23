@@ -3,6 +3,7 @@ pragma solidity 0.8.15;
 
 // Libraries
 import { LibString } from "@solady/utils/LibString.sol";
+import { Chains } from "scripts/libraries/Chains.sol";
 import { DevFeatures } from "src/libraries/DevFeatures.sol";
 
 // Tests
@@ -17,6 +18,8 @@ import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.
 import { IOptimismPortal2 } from "interfaces/L1/IOptimismPortal2.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IMIPS64 } from "interfaces/cannon/IMIPS64.sol";
+import { ISP1PlonkAdapter } from "interfaces/dispute/zk/ISP1PlonkAdapter.sol";
+import { ISP1Verifier } from "interfaces/vendor/ISP1Verifier.sol";
 
 contract VerifyOPCM_Harness is VerifyOPCM {
     bool private _skipSecurityChecks;
@@ -80,6 +83,14 @@ contract VerifyOPCM_Harness is VerifyOPCM {
         return _verifyPreimageOracle(_mips);
     }
 
+    function verifySP1Verifier(ISP1PlonkAdapter _adapter) public view returns (bool) {
+        return _verifySP1Verifier(_adapter);
+    }
+
+    function defaultSP1Verifier() public view returns (address) {
+        return _defaultSP1Verifier();
+    }
+
     function verifyPortalDelays(IOptimismPortal2 _portal) public view returns (bool) {
         return _verifyPortalDelays(_portal);
     }
@@ -88,8 +99,15 @@ contract VerifyOPCM_Harness is VerifyOPCM {
         return _verifyAnchorStateRegistryDelays(_asr);
     }
 
-    function verifyStandardValidatorArgs(IOPContractsManagerV2 _opcm, address _validator) public returns (bool) {
-        return _verifyStandardValidatorArgs(_opcm, _validator);
+    function verifyStandardValidatorArgs(
+        IOPContractsManagerV2 _opcm,
+        address _validator,
+        bool _skipConstructorVerification
+    )
+        public
+        returns (bool)
+    {
+        return _verifyStandardValidatorArgs(_opcm, _validator, _skipConstructorVerification);
     }
 
     function setValidatorGetterCheck(string memory _getter, string memory _check) public {
@@ -139,6 +157,12 @@ abstract contract VerifyOPCM_TestInit is CommonTest {
             "EXPECTED_DISPUTE_GAME_FINALITY_DELAY_SECONDS",
             vm.toString(anchorStateRegistry.disputeGameFinalityDelaySeconds())
         );
+        if (zkDisputeGameEnabled()) {
+            ISP1PlonkAdapter adapter = ISP1PlonkAdapter(opcm.implementations().sp1PlonkAdapterImpl);
+            ISP1Verifier verifier = adapter.sp1Verifier();
+            vm.setEnv("EXPECTED_SP1_VERIFIER", vm.toString(address(verifier)));
+            vm.setEnv("EXPECTED_SP1_VERIFIER_HASH", vm.toString(verifier.VERIFIER_HASH()));
+        }
     }
 
     function superGamesEnabled() internal view returns (bool) {
@@ -171,6 +195,35 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
         harness.run(address(opcm), true);
     }
 
+    function test_run_corruptedValidatorDependencies_reverts() public {
+        skipIfCoverage();
+
+        IOPContractsManagerStandardValidator validator =
+            IOPContractsManagerStandardValidator(opcm.opcmStandardValidator());
+        address[2] memory targets =
+            [address(validator.standardValidatorUtils()), address(validator.migrationValidator())];
+
+        harness.run(address(opcm), true);
+
+        for (uint256 i; i < targets.length; i++) {
+            bytes memory originalCode = targets[i].code;
+            bytes memory corruptedCode = abi.encodePacked(originalCode);
+            corruptedCode[0] = bytes1(uint8(corruptedCode[0]) ^ 0x01);
+
+            vm.etch(targets[i], corruptedCode);
+
+            vm.expectRevert(VerifyOPCM.VerifyOPCM_Failed.selector);
+            harness.run(address(opcm), true);
+
+            vm.etch(targets[i], hex"00");
+
+            vm.expectRevert(VerifyOPCM.VerifyOPCM_Failed.selector);
+            harness.run(address(opcm), true);
+
+            vm.etch(targets[i], originalCode);
+        }
+    }
+
     /// @notice Tests that the runSingle script succeeds when run against production contracts.
     function test_runSingle_succeeds() public {
         VerifyOPCM.OpcmContractRef[][2] memory refsByType;
@@ -181,8 +234,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
             for (uint256 j = 0; j < refsByType[i].length; j++) {
                 VerifyOPCM.OpcmContractRef memory ref = refsByType[i][j];
 
-                // TODO(#17262): Remove this skip once Super dispute games are no longer behind a feature flag
-                if (_isSuperDisputeGameContractRef(ref)) {
+                if (_isSuperDisputeGameContractRef(ref) && !superGamesEnabled()) {
                     continue;
                 }
 
@@ -550,7 +602,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
     }
 
     function _isZKDisputeGameContractRef(VerifyOPCM.OpcmContractRef memory ref) internal pure returns (bool) {
-        return LibString.eq(ref.name, "ZKDisputeGame");
+        return LibString.eq(ref.name, "ZKDisputeGame") || LibString.eq(ref.name, "SP1PlonkAdapter");
     }
 
     /// @notice Utility function to mock the first OPCM component's contractsContainer address.
@@ -755,5 +807,63 @@ contract VerifyOPCM_verifyPreimageOracle_Test is VerifyOPCM_TestInit {
 
         bool result = harness.verifyPreimageOracle(mipsImpl);
         assertFalse(result, "PreimageOracle verification should fail with corrupted bytecode");
+    }
+}
+
+/// @title VerifyOPCM_verifySP1Verifier_Test
+/// @notice Tests for release-approved raw SP1 verifier verification. The env overrides are set
+///         once in `setupEnvVars`; mismatches are injected with `vm.mockCall` because
+///         `vm.setEnv` is process-global and races with tests running on other threads.
+contract VerifyOPCM_verifySP1Verifier_Test is VerifyOPCM_TestInit {
+    function test_verifySP1Verifier_overrideAndMismatch_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+        ISP1PlonkAdapter adapter = ISP1PlonkAdapter(opcm.implementations().sp1PlonkAdapterImpl);
+
+        // On Mainnet the network default is Succinct's verifier; the env override must win.
+        vm.chainId(Chains.Mainnet);
+        assertTrue(harness.verifySP1Verifier(adapter), "env override should match the adapter's verifier");
+
+        vm.mockCall(address(adapter), abi.encodeCall(ISP1PlonkAdapter.sp1Verifier, ()), abi.encode(address(0xBEEF)));
+        assertFalse(harness.verifySP1Verifier(adapter), "verification should fail on address mismatch");
+    }
+
+    function test_verifySP1Verifier_hashMismatch_fails() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+        ISP1PlonkAdapter adapter = ISP1PlonkAdapter(opcm.implementations().sp1PlonkAdapterImpl);
+        ISP1Verifier verifier = adapter.sp1Verifier();
+
+        vm.mockCall(
+            address(verifier), abi.encodeCall(ISP1Verifier.VERIFIER_HASH, ()), abi.encode(bytes32(uint256(0xBEEF)))
+        );
+        assertFalse(harness.verifySP1Verifier(adapter), "verification should fail on hash mismatch");
+
+        vm.clearMockedCalls();
+        assertTrue(harness.verifySP1Verifier(adapter), "verification should succeed once the hash matches");
+    }
+}
+
+/// @title VerifyOPCM_defaultSP1Verifier_Test
+/// @notice Tests the network defaults for release-approved raw SP1 verifier verification.
+contract VerifyOPCM_defaultSP1Verifier_Test is CommonTest {
+    address internal constant SP1_VERIFIER_V6_1_0 = 0xc3c6dDDAc8829b233Dc6536Ec024775a57b0AF2A;
+
+    VerifyOPCM_Harness internal harness;
+
+    function setUp() public override {
+        super.setUp();
+        harness = new VerifyOPCM_Harness();
+    }
+
+    function test_defaultSP1Verifier_knownNetworks_succeeds() public {
+        vm.chainId(Chains.Mainnet);
+        assertEq(harness.defaultSP1Verifier(), SP1_VERIFIER_V6_1_0);
+
+        vm.chainId(Chains.Sepolia);
+        assertEq(harness.defaultSP1Verifier(), SP1_VERIFIER_V6_1_0);
+    }
+
+    function test_defaultSP1Verifier_unknownNetwork_succeeds() public {
+        vm.chainId(Chains.LocalDevnet);
+        assertEq(harness.defaultSP1Verifier(), address(0));
     }
 }

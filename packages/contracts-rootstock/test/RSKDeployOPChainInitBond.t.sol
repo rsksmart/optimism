@@ -21,7 +21,7 @@ contract RSKDeployOPChainInitBond_Test is RSKOPCTestBase {
 
         IDisputeGameFactory dgf = IDisputeGameFactory(address(output_.disputeGameFactoryProxy));
         assertEq(dgf.initBonds(GameTypes.PERMISSIONED_CANNON), 0);
-        assertEq(dgf.initBonds(GameTypes.SUPER_PERMISSIONED_CANNON), 0);
+        assertEq(dgf.initBonds(GameTypes.SUPER_PERMISSIONED), 0);
     }
 
     function test_runSplitWithBond_custom_deploysCustomBond() public {
@@ -31,7 +31,7 @@ contract RSKDeployOPChainInitBond_Test is RSKOPCTestBase {
         IDisputeGameFactory dgf = IDisputeGameFactory(address(output_.disputeGameFactoryProxy));
         assertEq(dgf.initBonds(GameTypes.PERMISSIONED_CANNON), 12345);
         // Disabled game types keep a zero bond regardless of the argument.
-        assertEq(dgf.initBonds(GameTypes.SUPER_PERMISSIONED_CANNON), 0);
+        assertEq(dgf.initBonds(GameTypes.SUPER_PERMISSIONED), 0);
     }
 
     /// @notice `runSplit` is the upstream-parity path: no bond argument, so it

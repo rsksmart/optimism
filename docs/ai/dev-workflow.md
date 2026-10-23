@@ -16,23 +16,26 @@ Run `mise install` to install all pinned tools (just, gotestsum, forge, etc.). A
 mise exec -- just <target>
 ```
 
+Then install the git hooks (once per clone — the setting is shared across all of a
+clone's worktrees):
+
+```bash
+mise exec -- just install-git-hooks
+```
+
+This points `core.hooksPath` at `.githooks/`. The `pre-push` hook blocks pushing
+unformatted Rust (mirroring CI's `rust-fmt` gate), so run it before you push any
+Rust change.
+
 ## Build System
 
 The repo uses [Just](https://github.com/casey/just) as its build system. Shared justfile infrastructure lives in `justfiles/`. Each component has its own justfile — run `just --list` in any directory to see available targets.
 
 ## Before Every PR
 
-After running language-specific commit checks (lint, test):
-
-1. **Run affected tests broadly** — don't just test the package/crate you changed. Test packages that depend on it too.
-
-2. **Rebase on `develop`** — this is the default branch, not `main`:
-   ```bash
-   git fetch origin develop
-   git rebase origin/develop
-   ```
-
-3. **Follow PR guidelines** — see `docs/handbook/pr-guidelines.md`.
+After the language-specific commit checks (lint, test), use
+[pr-guidelines.md](../handbook/pr-guidelines.md): the review agents that apply to the diff,
+tests, the rebase on `develop`, and the content of the PR description.
 
 ## CI
 

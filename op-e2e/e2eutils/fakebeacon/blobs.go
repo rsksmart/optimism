@@ -14,11 +14,11 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/blobstore"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/beacon/engine"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
-	"github.com/ethereum/go-ethereum/log"
 )
 
 // FakeBeacon presents a beacon-node in testing, without leading any chain-building.
@@ -96,13 +96,6 @@ func (f *FakeBeacon) Start(addr string) error {
 
 		if err := json.NewEncoder(w).Encode(&eth.APIBeaconBlobsResponse{Data: blobs}); err != nil {
 			f.log.Error("blobs handler err", "err", err)
-		}
-	})
-	mux.HandleFunc("/eth/v1/node/version", func(w http.ResponseWriter, r *http.Request) {
-		err := json.NewEncoder(w).Encode(&eth.APIVersionResponse{Data: eth.VersionInformation{Version: "fakebeacon 1.2.3"}})
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			f.log.Error("version handler err", "err", err)
 		}
 	})
 	f.beaconSrv = &http.Server{

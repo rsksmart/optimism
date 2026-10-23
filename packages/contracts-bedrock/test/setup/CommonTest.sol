@@ -6,6 +6,7 @@ import { Test } from "test/setup/Test.sol";
 import { Setup } from "test/setup/Setup.sol";
 import { Events } from "test/setup/Events.sol";
 import { FFIInterface } from "test/setup/FFIInterface.sol";
+import { MockSP1Verifier } from "test/dispute/zk/MockSP1Verifier.sol";
 
 // Scripts
 import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
@@ -84,11 +85,6 @@ abstract contract CommonTest is Test, Setup, Events {
             deploy.cfg().setOperatorFeeVaultWithdrawalNetwork(1);
         }
 
-        if (Config.devFeatureL2CM()) {
-            console.log("CommonTest: enabling l2cm");
-            devFeatureBitmap |= DevFeatures.L2CM;
-        }
-
         if (useInteropOverride) {
             console.log("CommonTest: enabling interop");
             devFeatureBitmap |= DevFeatures.OPTIMISM_PORTAL_INTEROP;
@@ -97,6 +93,10 @@ abstract contract CommonTest is Test, Setup, Events {
 
         // Sync the bitmap to deploy config after overrides
         deploy.cfg().setDevFeatureBitmap(devFeatureBitmap);
+        if (DevFeatures.isDevFeatureEnabled(devFeatureBitmap, DevFeatures.ZK_DISPUTE_GAME)) {
+            address sp1Verifier = address(new MockSP1Verifier());
+            deploy.cfg().setSP1Verifier(sp1Verifier);
+        }
 
         if (isL1ForkTest()) {
             // Skip any test suite which uses a nonstandard configuration.

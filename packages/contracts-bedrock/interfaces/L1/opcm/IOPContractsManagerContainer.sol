@@ -12,7 +12,6 @@ interface IOPContractsManagerContainer {
 
     struct Implementations {
         address superchainConfigImpl;
-        address protocolVersionsImpl;
         address l1ERC721BridgeImpl;
         address optimismPortalImpl;
         address ethLockboxImpl;
@@ -30,6 +29,7 @@ interface IOPContractsManagerContainer {
         address superPermissionedDisputeGameImpl;
         address zkDisputeGameImpl;
         address storageSetterImpl;
+        address sp1PlonkAdapterImpl;
     }
 
     error OPContractsManagerContainer_DevFeatureInProd();

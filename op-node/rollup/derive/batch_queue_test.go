@@ -12,12 +12,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
@@ -597,7 +597,7 @@ func testBatchStage_OverlappingSpanBatch(t *testing.T, batchType int, newBatchSt
 
 	t.Run("outdated origin", func(t *testing.T) {
 		invalidSpanSingulars := []*SingularBatch{
-			b(cfg.L2ChainID, 22, l1[0]), // same block number as safe head, will be skipped
+			safeBatch,                   // matches the safe head, so the overlap content checks pass
 			b(cfg.L2ChainID, 24, l1[0]), // first batch after safe head uses outdated origin 0
 			b(cfg.L2ChainID, 26, l1[1]),
 		}

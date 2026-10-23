@@ -15,12 +15,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 
+	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-core/forks"
+	opparams "github.com/ethereum-optimism/optimism/op-core/params"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/ptr"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
@@ -56,6 +59,11 @@ func randConfig() *Config {
 		BatchInboxAddress:      randAddr(),
 		DepositContractAddress: randAddr(),
 		L1SystemConfigAddress:  randAddr(),
+		ChainOpConfig: &opparams.OptimismConfig{
+			EIP1559Elasticity:        6,
+			EIP1559Denominator:       50,
+			EIP1559DenominatorCanyon: ptr.New(uint64(250)),
+		},
 	}
 }
 
@@ -66,6 +74,60 @@ func TestConfigJSON(t *testing.T) {
 	var roundTripped Config
 	assert.NoError(t, json.Unmarshal(data, &roundTripped))
 	assert.Equal(t, &roundTripped, config)
+}
+
+func TestAltDAConfigMaxInputSize(t *testing.T) {
+	custom := uint64(1_000_000)
+
+	require.Equal(t, uint64(altda.MaxInputSize), (*AltDAConfig)(nil).MaxInputSizeOrDefault())
+	require.Equal(t, uint64(altda.MaxInputSize), (&AltDAConfig{}).MaxInputSizeOrDefault())
+	require.Equal(t, custom, (&AltDAConfig{MaxInputSize: &custom}).MaxInputSizeOrDefault())
+
+	cfg := randConfig()
+	cfg.AltDAConfig = &AltDAConfig{
+		DAChallengeAddress: common.Address{1},
+		CommitmentType:     altda.KeccakCommitmentString,
+		MaxInputSize:       ptr.Zero64,
+	}
+	require.EqualError(t, cfg.Check(), "altDA max input size must be greater than zero")
+
+	cfg.AltDAConfig = &AltDAConfig{
+		CommitmentType: altda.GenericCommitmentString,
+		MaxInputSize:   &custom,
+	}
+	require.EqualError(t, cfg.Check(), "altDA max input size must be omitted for generic commitments")
+
+	cfg.AltDAConfig.MaxInputSize = nil
+	require.NoError(t, cfg.Check())
+}
+
+// TestConfigChainOpConfigJSONWireFormat pins the on-the-wire serialization of the
+// ChainOpConfig field. Its type moved from op-geth's params.OptimismConfig to
+// op-core/params.OptimismConfig; the JSON must remain byte-for-byte identical.
+func TestConfigChainOpConfigJSONWireFormat(t *testing.T) {
+	config := randConfig()
+	config.ChainOpConfig = &opparams.OptimismConfig{
+		EIP1559Elasticity:        6,
+		EIP1559Denominator:       50,
+		EIP1559DenominatorCanyon: ptr.New(uint64(250)),
+	}
+	data, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.Contains(t, string(data),
+		`"chain_op_config":{"eip1559Elasticity":6,"eip1559Denominator":50,"eip1559DenominatorCanyon":250}`)
+
+	// The optional canyon denominator is omitted when unset (omitempty).
+	config.ChainOpConfig.EIP1559DenominatorCanyon = nil
+	data, err = json.Marshal(config)
+	require.NoError(t, err)
+	require.Contains(t, string(data),
+		`"chain_op_config":{"eip1559Elasticity":6,"eip1559Denominator":50}`)
+
+	// The field is dropped entirely when nil (omitempty).
+	config.ChainOpConfig = nil
+	data, err = json.Marshal(config)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "chain_op_config")
 }
 
 type mockL1Client struct {
@@ -94,7 +156,7 @@ func TestValidateL1Config(t *testing.T) {
 	config.Genesis.L1.Number = 100
 	config.Genesis.L1.Hash = [32]byte{0x01}
 	mockClient := mockL1Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	err := config.ValidateL1Config(context.TODO(), testlog.Logger(t, log.LvlInfo), &mockClient)
+	err := config.ValidateL1Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient)
 	assert.NoError(t, err)
 }
 
@@ -104,7 +166,7 @@ func TestValidateL1ConfigInvalidChainIdFails(t *testing.T) {
 	config.Genesis.L1.Number = 100
 	config.Genesis.L1.Hash = [32]byte{0x01}
 	mockClient := mockL1Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	logger := testlog.Logger(t, log.LvlInfo)
+	logger := testlog.Logger(t, log.LevelInfo)
 	err := config.ValidateL1Config(context.TODO(), logger, &mockClient)
 	assert.Error(t, err)
 	config.L1ChainID = big.NewInt(99)
@@ -118,7 +180,7 @@ func TestValidateL1ConfigInvalidGenesisHashFails(t *testing.T) {
 	config.Genesis.L1.Number = 100
 	config.Genesis.L1.Hash = [32]byte{0x00}
 	mockClient := mockL1Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	logger := testlog.Logger(t, log.LvlInfo)
+	logger := testlog.Logger(t, log.LevelInfo)
 	err := config.ValidateL1Config(context.TODO(), logger, &mockClient)
 	assert.Error(t, err)
 	config.Genesis.L1.Hash = [32]byte{0x02}
@@ -138,7 +200,7 @@ func TestCheckL1ChainID(t *testing.T) {
 }
 
 func TestCheckL1BlockRefByNumber(t *testing.T) {
-	logger := testlog.Logger(t, log.LvlInfo)
+	logger := testlog.Logger(t, log.LevelInfo)
 	config := randConfig()
 	config.Genesis.L1.Number = 100
 	config.Genesis.L1.Hash = [32]byte{0x01}
@@ -158,6 +220,27 @@ func TestCheckL1BlockRefByNumber(t *testing.T) {
 }
 
 // TestRandomConfigDescription tests that the description works for different variations of a random rollup config.
+func TestLogDescription(t *testing.T) {
+	config := randConfig()
+
+	t.Run("named L2", func(t *testing.T) {
+		lgr, logs := testlog.CaptureLogger(t, log.LevelInfo)
+		config.LogDescription(lgr, map[string]string{config.L2ChainID.String(): "foobar chain"})
+		rec := logs.FindLog(testlog.NewMessageFilter("Rollup Config"))
+		require.NotNil(t, rec)
+		require.Equal(t, "foobar chain", rec.AttrValue("l2_network"))
+	})
+
+	t.Run("unnamed L2", func(t *testing.T) {
+		lgr, logs := testlog.CaptureLogger(t, log.LevelInfo)
+		config.LogDescription(lgr, nil)
+		rec := logs.FindLog(testlog.NewMessageFilter("Rollup Config"))
+		require.NotNil(t, rec)
+		require.Nil(t, rec.AttrValue("l2_network"), "l2_network is omitted when no name is known")
+		require.Equal(t, "unknown L1", rec.AttrValue("l1_network"))
+	})
+}
+
 func TestRandomConfigDescription(t *testing.T) {
 	t.Run("named L2", func(t *testing.T) {
 		config := randConfig()
@@ -209,7 +292,7 @@ func TestRandomConfigDescription(t *testing.T) {
 		k := uint64(1677119343)
 		config.KarstTime = &k
 		it := uint64(1677119344)
-		config.InteropTime = &it
+		config.LagoonTime = &it
 
 		out := config.Description(nil)
 		// Don't check human-readable part of the date, it's timezone-dependent.
@@ -223,7 +306,7 @@ func TestRandomConfigDescription(t *testing.T) {
 		require.Contains(t, out, fmt.Sprintf("Isthmus: @ %d ~ ", i))
 		require.Contains(t, out, fmt.Sprintf("Jovian: @ %d ~ ", j))
 		require.Contains(t, out, fmt.Sprintf("Karst: @ %d ~ ", k))
-		require.Contains(t, out, fmt.Sprintf("Interop: @ %d ~ ", it))
+		require.Contains(t, out, fmt.Sprintf("Lagoon: @ %d ~ ", it))
 	})
 }
 
@@ -345,9 +428,9 @@ func TestActivations(t *testing.T) {
 			},
 		},
 		{
-			name: "Interop",
+			name: "Lagoon",
 			setUpgradeTime: func(t *uint64, c *Config) {
-				c.InteropTime = t
+				c.LagoonTime = t
 			},
 			checkEnabled: func(t uint64, c *Config) bool {
 				return c.IsInterop(t)
@@ -378,6 +461,7 @@ func TestActivations(t *testing.T) {
 type mockL2Client struct {
 	chainID *big.Int
 	Hash    common.Hash
+	err     error
 }
 
 func (m *mockL2Client) ChainID(context.Context) (*big.Int, error) {
@@ -385,11 +469,21 @@ func (m *mockL2Client) ChainID(context.Context) (*big.Int, error) {
 }
 
 func (m *mockL2Client) L2BlockRefByNumber(ctx context.Context, number uint64) (eth.L2BlockRef, error) {
+	if m.err != nil {
+		return eth.L2BlockRef{}, m.err
+	}
 	return eth.L2BlockRef{
 		Hash:   m.Hash,
 		Number: 100,
 	}, nil
 }
+
+// historyPrunedRPCError implements rpc.Error with the EIP-4444 history-pruned error code,
+// matching what an execution engine with history expiry returns for an expired block.
+type historyPrunedRPCError struct{}
+
+func (historyPrunedRPCError) Error() string  { return "pruned history unavailable" }
+func (historyPrunedRPCError) ErrorCode() int { return historyPrunedErrCode }
 
 func TestValidateL2Config(t *testing.T) {
 	config := randConfig()
@@ -397,7 +491,7 @@ func TestValidateL2Config(t *testing.T) {
 	config.Genesis.L2.Number = 100
 	config.Genesis.L2.Hash = [32]byte{0x01}
 	mockClient := mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	err := config.ValidateL2Config(context.TODO(), &mockClient, false)
+	err := config.ValidateL2Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient, false)
 	assert.NoError(t, err)
 }
 
@@ -407,10 +501,10 @@ func TestValidateL2ConfigInvalidChainIdFails(t *testing.T) {
 	config.Genesis.L2.Number = 100
 	config.Genesis.L2.Hash = [32]byte{0x01}
 	mockClient := mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	err := config.ValidateL2Config(context.TODO(), &mockClient, false)
+	err := config.ValidateL2Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient, false)
 	assert.Error(t, err)
 	config.L2ChainID = big.NewInt(99)
-	err = config.ValidateL2Config(context.TODO(), &mockClient, false)
+	err = config.ValidateL2Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient, false)
 	assert.Error(t, err)
 }
 
@@ -420,10 +514,10 @@ func TestValidateL2ConfigInvalidGenesisHashFails(t *testing.T) {
 	config.Genesis.L2.Number = 100
 	config.Genesis.L2.Hash = [32]byte{0x00}
 	mockClient := mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	err := config.ValidateL2Config(context.TODO(), &mockClient, false)
+	err := config.ValidateL2Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient, false)
 	assert.Error(t, err)
 	config.Genesis.L2.Hash = [32]byte{0x02}
-	err = config.ValidateL2Config(context.TODO(), &mockClient, false)
+	err = config.ValidateL2Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient, false)
 	assert.Error(t, err)
 }
 
@@ -433,10 +527,10 @@ func TestValidateL2ConfigInvalidGenesisHashSkippedWhenRequested(t *testing.T) {
 	config.Genesis.L2.Number = 100
 	config.Genesis.L2.Hash = [32]byte{0x00}
 	mockClient := mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	err := config.ValidateL2Config(context.TODO(), &mockClient, true)
+	err := config.ValidateL2Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient, true)
 	assert.NoError(t, err)
 	config.Genesis.L2.Hash = [32]byte{0x02}
-	err = config.ValidateL2Config(context.TODO(), &mockClient, true)
+	err = config.ValidateL2Config(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient, true)
 	assert.NoError(t, err)
 }
 
@@ -456,13 +550,29 @@ func TestCheckL2BlockRefByNumber(t *testing.T) {
 	config.Genesis.L2.Number = 100
 	config.Genesis.L2.Hash = [32]byte{0x01}
 	mockClient := mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}}
-	err := config.CheckL2GenesisBlockHash(context.TODO(), &mockClient)
+	err := config.CheckL2GenesisBlockHash(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient)
 	assert.NoError(t, err)
 	mockClient.Hash = common.Hash{0x02}
-	err = config.CheckL2GenesisBlockHash(context.TODO(), &mockClient)
+	err = config.CheckL2GenesisBlockHash(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient)
 	assert.Error(t, err)
 	mockClient.Hash = common.Hash{0x00}
-	err = config.CheckL2GenesisBlockHash(context.TODO(), &mockClient)
+	err = config.CheckL2GenesisBlockHash(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient)
+	assert.Error(t, err)
+
+	// A history-pruned execution engine can no longer serve the genesis block; the configured
+	// genesis hash is authoritative, so the check is skipped rather than failing.
+	mockClient = mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}, err: historyPrunedRPCError{}}
+	err = config.CheckL2GenesisBlockHash(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient)
+	assert.NoError(t, err)
+
+	// A NotFound result is likewise tolerated.
+	mockClient = mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}, err: ethereum.NotFound}
+	err = config.CheckL2GenesisBlockHash(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient)
+	assert.NoError(t, err)
+
+	// Any other fetch error still fails the check.
+	mockClient = mockL2Client{chainID: big.NewInt(100), Hash: common.Hash{0x01}, err: errors.New("connection refused")}
+	err = config.CheckL2GenesisBlockHash(context.TODO(), testlog.Logger(t, log.LevelInfo), &mockClient)
 	assert.Error(t, err)
 }
 
@@ -596,6 +706,13 @@ func TestConfig_Check(t *testing.T) {
 			expectedErr: fmt.Errorf("fork ecotone set (to 1), but prior fork delta missing"),
 		},
 		{
+			name: "PriorForkMissingPastIsthmus",
+			modifier: func(cfg *Config) {
+				cfg.KarstTime = ptr.New(uint64(1))
+			},
+			expectedErr: fmt.Errorf("fork karst set (to 1), but prior fork jovian missing"),
+		},
+		{
 			name: "PriorForkHasHigherOffset",
 			modifier: func(cfg *Config) {
 				regolithTime := uint64(2)
@@ -629,7 +746,7 @@ func TestConfig_Check(t *testing.T) {
 				cfg.IsthmusTime = &isthmusTime
 				cfg.JovianTime = &jovianTime
 				cfg.KarstTime = &karstTime
-				cfg.InteropTime = &interopTime
+				cfg.LagoonTime = &interopTime
 			},
 			expectedErr: nil,
 		},
@@ -643,6 +760,53 @@ func TestConfig_Check(t *testing.T) {
 			assert.Equal(t, err, test.expectedErr)
 		})
 	}
+}
+
+// TestConfigCheckSimultaneousForkActivation checks that two forks may only share an activation
+// time when they activate at or before genesis.
+func TestConfigCheckSimultaneousForkActivation(t *testing.T) {
+	scheduleAll := func(cfg *Config, activation uint64) {
+		for _, fork := range forks.From(forks.Regolith) {
+			cfg.SetActivationTime(fork, ptr.New(activation))
+		}
+	}
+
+	t.Run("AtGenesis", func(t *testing.T) {
+		cfg := randConfig()
+		scheduleAll(cfg, cfg.Genesis.L2Time)
+		require.NoError(t, cfg.Check())
+	})
+
+	t.Run("BeforeGenesis", func(t *testing.T) {
+		cfg := randConfig()
+		scheduleAll(cfg, 0)
+		require.NoError(t, cfg.Check())
+	})
+
+	t.Run("AfterGenesis", func(t *testing.T) {
+		cfg := randConfig()
+		scheduleAll(cfg, 0)
+		activation := cfg.Genesis.L2Time + cfg.BlockTime
+		cfg.SetActivationTime(forks.Karst, ptr.New(activation))
+		cfg.SetActivationTime(forks.Lagoon, ptr.New(activation))
+		require.EqualError(t, cfg.Check(), fmt.Sprintf(
+			"fork lagoon and prior fork karst both set to %d, but activating multiple forks at the same time after genesis is not supported",
+			activation))
+	})
+
+	// Chains that shared an activation timestamp before strictActivationOrderFrom must keep
+	// loading — Celo mainnet activated Holocene and Isthmus in the same block.
+	t.Run("AfterGenesisBeforeStrictFork", func(t *testing.T) {
+		cfg := randConfig()
+		scheduleAll(cfg, 0)
+		activation := cfg.Genesis.L2Time + cfg.BlockTime
+		cfg.SetActivationTime(forks.Holocene, ptr.New(activation))
+		cfg.SetActivationTime(forks.Isthmus, ptr.New(activation))
+		cfg.SetActivationTime(forks.Jovian, ptr.New(activation+cfg.BlockTime))
+		cfg.SetActivationTime(forks.Karst, ptr.New(activation+2*cfg.BlockTime))
+		cfg.SetActivationTime(forks.Lagoon, ptr.New(activation+3*cfg.BlockTime))
+		require.NoError(t, cfg.Check())
+	})
 }
 
 func TestTimestampForBlock(t *testing.T) {
@@ -796,6 +960,7 @@ func TestGetPayloadVersion(t *testing.T) {
 		name           string
 		isthmusTime    uint64
 		ecotoneTime    uint64
+		karstTime      uint64
 		payloadTime    uint64
 		expectedMethod eth.EngineAPIMethod
 	}{
@@ -804,6 +969,7 @@ func TestGetPayloadVersion(t *testing.T) {
 			ecotoneTime:    10,
 			payloadTime:    5,
 			isthmusTime:    20,
+			karstTime:      30,
 			expectedMethod: eth.GetPayloadV2,
 		},
 		{
@@ -811,6 +977,7 @@ func TestGetPayloadVersion(t *testing.T) {
 			ecotoneTime:    10,
 			payloadTime:    15,
 			isthmusTime:    20,
+			karstTime:      30,
 			expectedMethod: eth.GetPayloadV3,
 		},
 		{
@@ -818,7 +985,16 @@ func TestGetPayloadVersion(t *testing.T) {
 			ecotoneTime:    10,
 			payloadTime:    25,
 			isthmusTime:    20,
+			karstTime:      30,
 			expectedMethod: eth.GetPayloadV4,
+		},
+		{
+			name:           "Karst",
+			ecotoneTime:    10,
+			payloadTime:    35,
+			isthmusTime:    20,
+			karstTime:      30,
+			expectedMethod: eth.GetPayloadV5,
 		},
 	}
 
@@ -827,6 +1003,7 @@ func TestGetPayloadVersion(t *testing.T) {
 		t.Run(fmt.Sprintf("TestGetPayloadVersion_%s", test.name), func(t *testing.T) {
 			config.EcotoneTime = &test.ecotoneTime
 			config.IsthmusTime = &test.isthmusTime
+			config.KarstTime = &test.karstTime
 			assert.Equal(t, config.GetPayloadVersion(test.payloadTime), test.expectedMethod)
 		})
 	}
@@ -845,7 +1022,7 @@ func TestConfig_IsActivationBlock(t *testing.T) {
 		{forks.Granite, func(cfg *Config, ts uint64) { cfg.GraniteTime = &ts }},
 		{forks.Holocene, func(cfg *Config, ts uint64) { cfg.HoloceneTime = &ts }},
 		{forks.Isthmus, func(cfg *Config, ts uint64) { cfg.IsthmusTime = &ts }},
-		{forks.Interop, func(cfg *Config, ts uint64) { cfg.InteropTime = &ts }},
+		{forks.Lagoon, func(cfg *Config, ts uint64) { cfg.LagoonTime = &ts }},
 	}
 
 	for _, tc := range tests {
@@ -986,6 +1163,18 @@ func TestConfig_IsForkActive(t *testing.T) {
 			require.True(t, cfg.IsForkActive(fork, 101))
 		})
 	}
+}
+
+func TestConfig_IsSDM(t *testing.T) {
+	var cfg Config
+	require.False(t, cfg.IsSDM(0))
+	require.False(t, cfg.IsSDM(100))
+
+	activation := uint64(100)
+	cfg.LagoonTime = &activation
+	require.False(t, cfg.IsSDM(99))
+	require.True(t, cfg.IsSDM(100))
+	require.True(t, cfg.IsSDM(101))
 }
 
 // TestConfig_ActivationBlockAndForFork combines tests for IsActivationBlock and IsActivationBlockForFork.

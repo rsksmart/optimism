@@ -14,7 +14,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 // TestSequencingWindowExpiry tests that the sequencing window may expire,
@@ -26,9 +27,7 @@ func TestSequencingWindowExpiry(gt *testing.T) {
 	sys := presets.NewTwoL2SupernodeInterop(t, 0,
 		presets.WithDeployerOptions(sysgo.WithSequencingWindow(10)),
 		presets.WithBatcherOption(func(id sysgo.ComponentTarget, cfg *bss.CLIConfig) {
-			// Span-batches during recovery don't appear to align well with the starting-point.
-			// It can be off by ~6 L2 blocks, possibly due to off-by-one in L1 block sync
-			// considerations in batcher stop or start.
+			// Recovery mode is only supported with the batcher running in singular batch mode.
 			cfg.BatchType = derive.SingularBatchType
 		}),
 	)
@@ -143,13 +142,11 @@ func TestSequencingWindowExpiry(gt *testing.T) {
 	t.Logger().Info("Re-enabling batch-submitter")
 	// re-enable the batcher now that we are done with the test.
 	sys.L2BatcherA.Start()
-	// TODO(#16036): batcher submits future span batch, misses a L2 block.
-	// For now it uses singular batches to work-around.
 
 	// Build the missing blocks, catch up on local-safe chain
 	dsl.CheckAll(t,
-		sys.L2ACL.AdvancedFn(types.LocalSafe, 20, 100),
-		sys.L2ACL.AdvancedFn(types.LocalUnsafe, 20, 100),
+		sys.L2ACL.AdvancedFn(safety.LocalSafe, 20, 100),
+		sys.L2ACL.AdvancedFn(safety.LocalUnsafe, 20, 100),
 	)
 
 	syncStatus = sys.L2ACL.SyncStatus()

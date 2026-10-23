@@ -63,6 +63,29 @@ struct DisputeGameValidationArgs {
     string errorPrefix;
 }
 
+/// @notice Struct containing the simplified game args for a super permissioned dispute game implementation.
+struct SuperPermissionedDisputeGameImplementation {
+    address gameAddress;
+    IAnchorStateRegistry asr;
+    address proposer;
+}
+
+/// @notice Arguments passed to `assertValidSuperPermissionedDisputeGame`.
+struct SuperPermissionedDisputeGameValidationArgs {
+    string errors;
+    ISystemConfig sysCfg;
+    SuperPermissionedDisputeGameImplementation game;
+    IProxyAdmin admin;
+    address expectedProposer;
+    string errorPrefix;
+}
+
+/// @notice Implementation addresses used when validating a super permissioned dispute game.
+struct SuperPermissionedDisputeGameImpls {
+    address expectedGameImpl;
+    address anchorStateRegistryImpl;
+}
+
 /// @notice Implementation addresses used when validating a dispute game (resolved by caller).
 struct DisputeGameImpls {
     address expectedGameImpl;
@@ -101,6 +124,12 @@ contract StandardValidatorUtils {
         } else {
             errors_ = string.concat(_errors, ",", _message);
         }
+    }
+
+    /// @notice Returns the expected ETHLockbox for a chain.
+    function expectedETHLockbox(ISystemConfig _sysCfg) internal view returns (address) {
+        IOptimismPortal2 portal = IOptimismPortal2(payable(_sysCfg.optimismPortal()));
+        return address(portal.ethLockbox());
     }
 
     /// @notice Asserts that the SuperchainConfig contract is valid.
@@ -144,12 +173,9 @@ contract StandardValidatorUtils {
         _errors =
             internalRequire(address(dgf.gameImpls(GameTypes.PERMISSIONED_CANNON)) == address(0), "PDDG-SHAPE", _errors);
         _errors = internalRequire(address(dgf.gameImpls(GameTypes.CANNON_KONA)) == address(0), "CKDG-SHAPE", _errors);
-        // TODO(#20030): Once SUPER_CANNON is disabled in migrator, re-add check that SUPER_CANNON == address(0).
-        // _errors =
-        //     internalRequire(address(dgf.gameImpls(GameTypes.SUPER_CANNON)) == address(0), "SCDG-SHAPE", _errors);
-        _errors = internalRequire(
-            address(dgf.gameImpls(GameTypes.SUPER_PERMISSIONED_CANNON)) != address(0), "SPDG-SHAPE", _errors
-        );
+        _errors = internalRequire(address(dgf.gameImpls(GameTypes.SUPER_CANNON)) == address(0), "SCDG-SHAPE", _errors);
+        _errors =
+            internalRequire(address(dgf.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0), "SPDG-SHAPE", _errors);
         _errors =
             internalRequire(address(dgf.gameImpls(GameTypes.SUPER_CANNON_KONA)) != address(0), "SCKDG-SHAPE", _errors);
         return _errors;
@@ -165,12 +191,14 @@ contract StandardValidatorUtils {
         returns (string memory)
     {
         IDisputeGameFactory dgf = IDisputeGameFactory(_sysCfg.disputeGameFactory());
+        _errors = internalRequire(address(dgf.gameImpls(GameTypes.CANNON)) == address(0), "PLDG-NOSHAPE", _errors);
         _errors = internalRequire(address(dgf.gameImpls(GameTypes.SUPER_CANNON)) == address(0), "SCDG-NOSHAPE", _errors);
-        _errors = internalRequire(
-            address(dgf.gameImpls(GameTypes.SUPER_PERMISSIONED_CANNON)) == address(0), "SPDG-NOSHAPE", _errors
-        );
+        _errors =
+            internalRequire(address(dgf.gameImpls(GameTypes.SUPER_PERMISSIONED)) == address(0), "SPDG-NOSHAPE", _errors);
         _errors =
             internalRequire(address(dgf.gameImpls(GameTypes.SUPER_CANNON_KONA)) == address(0), "SCKDG-NOSHAPE", _errors);
+        // TODO(#21529): add ZKDG-NOSHAPE check here once the super-root ZKDisputeGame is ready to be used
+        // after interop migration. After that, ZK_DISPUTE_GAME must never be registered on non-super-root chains.
         _errors = internalRequire(
             address(dgf.gameImpls(GameTypes.PERMISSIONED_CANNON)) != address(0), "PDDG-NOSHAPE", _errors
         );
@@ -243,10 +271,10 @@ contract StandardValidatorUtils {
         _errors = internalRequire(_factory.owner() == _l1PAOMultisig, "DF-30", _errors);
         _errors = internalRequire(IProxyAdminOwnedBase(address(_factory)).proxyAdmin() == _admin, "DF-40", _errors);
         // At least one permissioned game must be registered — either the legacy
-        // PERMISSIONED_CANNON or the super-root SUPER_PERMISSIONED_CANNON.
+        // PERMISSIONED_CANNON or the super-root SUPER_PERMISSIONED.
         _errors = internalRequire(
             address(_factory.gameImpls(GameTypes.PERMISSIONED_CANNON)) != address(0)
-                || address(_factory.gameImpls(GameTypes.SUPER_PERMISSIONED_CANNON)) != address(0),
+                || address(_factory.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0),
             "DF-50",
             _errors
         );
@@ -271,8 +299,6 @@ contract StandardValidatorUtils {
         );
         _errors = internalRequire(_admin.getProxyImplementation(address(_portal)) == _impl, "PORTAL-20", _errors);
 
-        IDisputeGameFactory _dgf = IDisputeGameFactory(_sysCfg.disputeGameFactory());
-        _errors = internalRequire(address(_portal.disputeGameFactory()) == address(_dgf), "PORTAL-30", _errors);
         _errors = internalRequire(address(_portal.systemConfig()) == address(_sysCfg), "PORTAL-40", _errors);
         _errors = internalRequire(_portal.l2Sender() == Constants.DEFAULT_L2_SENDER, "PORTAL-80", _errors);
         _errors = internalRequire(IProxyAdminOwnedBase(address(_portal)).proxyAdmin() == _admin, "PORTAL-90", _errors);
@@ -333,10 +359,13 @@ contract StandardValidatorUtils {
         _errors =
             internalRequire(_weth.proxyAdminOwner() == _l1PAOMultisig, string.concat(_errorPrefix, "-30"), _errors);
         _errors = internalRequire(_weth.delay() == _withdrawalDelaySeconds, string.concat(_errorPrefix, "-40"), _errors);
-        _errors = internalRequire(_weth.systemConfig() == _sysCfg, string.concat(_errorPrefix, "-50"), _errors);
+        _errors = internalRequire(
+            address(_weth.ethLockbox()) == expectedETHLockbox(_sysCfg), string.concat(_errorPrefix, "-50"), _errors
+        );
         _errors = internalRequire(
             IProxyAdminOwnedBase(address(_weth)).proxyAdmin() == _admin, string.concat(_errorPrefix, "-60"), _errors
         );
+        _errors = internalRequire(address(_weth) == _sysCfg.delayedWETH(), string.concat(_errorPrefix, "-70"), _errors);
         return _errors;
     }
 
@@ -368,11 +397,21 @@ contract StandardValidatorUtils {
         _errors = internalRequire(
             address(_asr.disputeGameFactory()) == address(_dgf), string.concat(_errorPrefix, "-30"), _errors
         );
-        _errors = internalRequire(_asr.systemConfig() == _sysCfg, string.concat(_errorPrefix, "-40"), _errors);
+        _errors = internalRequire(
+            address(_asr.ethLockbox()) == expectedETHLockbox(_sysCfg), string.concat(_errorPrefix, "-40"), _errors
+        );
         _errors = internalRequire(
             IProxyAdminOwnedBase(address(_asr)).proxyAdmin() == _admin, string.concat(_errorPrefix, "-50"), _errors
         );
         _errors = internalRequire(_asr.retirementTimestamp() > 0, string.concat(_errorPrefix, "-60"), _errors);
+        // The registry a game anchors against must be the one the portal consults when finalizing
+        // withdrawals. Without this, a game could snapshot the respected game type of a second,
+        // locally valid registry that the portal never reads.
+        _errors = internalRequire(
+            IOptimismPortal2(payable(_sysCfg.optimismPortal())).anchorStateRegistry() == _asr,
+            string.concat(_errorPrefix, "-70"),
+            _errors
+        );
         return _errors;
     }
 
@@ -399,12 +438,15 @@ contract StandardValidatorUtils {
             string.concat(errorPrefix, "-20"),
             errors_
         );
+        errors_ =
+            internalRequire(game.gameAddress == _impls.expectedGameImpl, string.concat(errorPrefix, "-150"), errors_);
 
         errors_ = internalRequire(
             GameType.unwrap(game.gameType) == GameType.unwrap(_args.gameType),
             string.concat(errorPrefix, "-30"),
             errors_
         );
+
         errors_ = internalRequire(
             Claim.unwrap(game.absolutePrestate) == _args.absolutePrestate, string.concat(errorPrefix, "-40"), errors_
         );
@@ -447,6 +489,37 @@ contract StandardValidatorUtils {
         if (address(game.vm) == _impls.mipsImpl) {
             errors_ = assertValidPreimageOracle(errors_, game.vm.oracle(), errorPrefix);
         }
+
+        return errors_;
+    }
+
+    /// @notice Asserts that a simplified SuperPermissionedDisputeGame contract is valid.
+    function assertValidSuperPermissionedDisputeGame(
+        SuperPermissionedDisputeGameValidationArgs memory _args,
+        SuperPermissionedDisputeGameImpls memory _impls
+    )
+        public
+        view
+        returns (string memory errors_)
+    {
+        errors_ = _args.errors;
+        string memory errorPrefix = _args.errorPrefix;
+        SuperPermissionedDisputeGameImplementation memory game = _args.game;
+        (Hash anchorRoot,) = game.asr.getAnchorRoot();
+        IDisputeGameFactory dgf = IDisputeGameFactory(_args.sysCfg.disputeGameFactory());
+
+        errors_ = internalRequire(
+            LibString.eq(ISemver(game.gameAddress).version(), ISemver(_impls.expectedGameImpl).version()),
+            string.concat(errorPrefix, "-20"),
+            errors_
+        );
+        errors_ =
+            internalRequire(game.gameAddress == _impls.expectedGameImpl, string.concat(errorPrefix, "-150"), errors_);
+        errors_ = internalRequire(Hash.unwrap(anchorRoot) != bytes32(0), string.concat(errorPrefix, "-120"), errors_);
+        errors_ = assertValidAnchorStateRegistry(
+            errors_, _args.sysCfg, dgf, game.asr, _args.admin, _impls.anchorStateRegistryImpl, errorPrefix
+        );
+        errors_ = internalRequire(game.proposer == _args.expectedProposer, string.concat(errorPrefix, "-140"), errors_);
 
         return errors_;
     }

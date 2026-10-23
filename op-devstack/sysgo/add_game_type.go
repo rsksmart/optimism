@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/upgrade/embedded"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
+	sharedchallenger "github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
 	op_service "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
@@ -72,7 +73,7 @@ func setRespectedGameTypeForRuntime(
 		txplan.WithAgainstLatestBlockEthClient(client),
 		txplan.WithEstimator(client, true),
 		txplan.WithRetrySubmission(client, 5, retry.Exponential()),
-		txplan.WithRetryInclusion(client, 5, retry.Exponential()))
+		txplan.WithRetryInclusion(txplan.FromGethReceipts(client), 5, retry.Exponential()))
 
 	asrBindings := bindings.NewBindings[bindings.AnchorStateRegistry](bindings.WithTo(asrAddr), bindings.WithTest(t))
 	rcpt, err := contractio.Write(asrBindings.SetRespectedGameType(uint32(gameType)), t.Ctx(), txOpts)
@@ -87,7 +88,7 @@ func addGameTypesForRuntime(
 	keys devkeys.Keys,
 	enabledGameTypes []gameTypes.GameType,
 	l1ChainID eth.ChainID,
-	l1ELRPC string,
+	l1EL L1ELNode,
 	l2Net *L2Network,
 ) {
 	require := t.Require()
@@ -95,14 +96,15 @@ func addGameTypesForRuntime(
 	require.NotNil(l2Net.deployment, "l2 deployment must exist")
 	require.NotEqual(common.Address{}, l2Net.opcmImpl, "missing OPCM implementation address")
 
-	rpcClient, err := rpc.DialContext(t.Ctx(), l1ELRPC)
+	rpcClient, err := rpc.DialContext(t.Ctx(), l1EL.UserRPC())
 	require.NoError(err)
 	defer rpcClient.Close()
 	client := ethclient.NewClient(rpcClient)
 
 	l1PAO, l1PAOKey := resolveL1ProxyAdminOwner(t, keys, l1ChainID)
 
-	chainOps := devkeys.ChainOperatorKeys(l1ChainID.ToBig())
+	// Operator roles are scoped to the OP chain, even though the game contracts use them on L1.
+	chainOps := devkeys.ChainOperatorKeys(l2Net.ChainID().ToBig())
 	proposer, err := keys.Address(chainOps(devkeys.ProposerRole))
 	require.NoError(err, "failed to get proposer address")
 	challenger, err := keys.Address(chainOps(devkeys.ChallengerRole))
@@ -112,33 +114,38 @@ func addGameTypesForRuntime(
 	for _, gt := range enabledGameTypes {
 		enabled[gt] = true
 	}
-	initBond := eth.GWei(80_000_000).ToBig() // 0.08 ETH
+	initBond := new(big.Int).Set(defaultInitBond)
 
-	cannonPrestate := PrestateForGameType(t, gameTypes.CannonGameType)
 	cannonKonaPrestate := PrestateForGameType(t, gameTypes.CannonKonaGameType)
+	superCannonKonaPrestate := PrestateForGameType(t, gameTypes.SuperCannonKonaGameType)
+	dummyCannonPrestate := common.HexToHash(sharedchallenger.DummyPermissionedPrestate)
+	extraInstructions := []embedded.ExtraInstruction{
+		{
+			Key:  "overrides.cfg.startingRespectedGameType",
+			Data: encodeStartingRespectedGameType(t, superPermissionedGameType),
+		},
+	}
+
+	// Download the contracts artifacts for the upgrade.
+	artifactsFS, err := artifacts.Download(t.Ctx(), LocalArtifacts(t), ioutil.NoopProgressor(), t.TempDir())
+	require.NoError(err, "failed to download artifacts")
 
 	var zkDisputeGameConfig *embedded.ZKDisputeGameConfig
 	if enabled[gameTypes.ZKDisputeGameType] {
-		zkDisputeGameConfig = ZKDisputeGameConfigForRuntime(t)
+		zkDisputeGameConfig = ZKDisputeGameConfigForRuntime()
 	}
 
-	// OPCMv2 requires all 7 game configs in order:
-	// CANNON, PERMISSIONED_CANNON, CANNON_KONA, SUPER_CANNON, SUPER_PERMISSIONED_CANNON, SUPER_CANNON_KONA, ZK_DISPUTE_GAME.
+	// OPCMv2 requires all 6 game configs in order. Keep the legacy Cannon Kona
+	// slot available for pre-Isthmus hard-fork tests while using super-root games
+	// for post-migration configurations.
 	configs := []embedded.DisputeGameConfig{
+		{Enabled: false, InitBond: new(big.Int), GameType: embedded.GameTypeCannon},
 		{
-			Enabled:  enabled[gameTypes.CannonGameType],
-			InitBond: initBond,
-			GameType: embedded.GameTypeCannon,
-			FaultDisputeGameConfig: &embedded.FaultDisputeGameConfig{
-				AbsolutePrestate: cannonPrestate,
-			},
-		},
-		{
-			Enabled:  true, // Permissioned cannon is always enabled.
+			Enabled:  enabled[gameTypes.PermissionedGameType],
 			InitBond: initBond,
 			GameType: embedded.GameTypePermissionedCannon,
 			PermissionedDisputeGameConfig: &embedded.PermissionedDisputeGameConfig{
-				AbsolutePrestate: cannonPrestate,
+				AbsolutePrestate: dummyCannonPrestate,
 				Proposer:         proposer,
 				Challenger:       challenger,
 			},
@@ -151,9 +158,22 @@ func addGameTypesForRuntime(
 				AbsolutePrestate: cannonKonaPrestate,
 			},
 		},
-		{Enabled: false, InitBond: new(big.Int), GameType: embedded.GameTypeSuperCannon},
-		{Enabled: false, InitBond: new(big.Int), GameType: embedded.GameTypeSuperPermCannon},
-		{Enabled: false, InitBond: new(big.Int), GameType: embedded.GameTypeSuperCannonKona},
+		{
+			Enabled:  true,
+			InitBond: new(big.Int),
+			GameType: embedded.GameTypeSuperPermissioned,
+			SuperPermissionedDisputeGameConfig: &embedded.SuperPermissionedDisputeGameConfig{
+				Proposer: proposer,
+			},
+		},
+		{
+			Enabled:  enabled[gameTypes.SuperCannonKonaGameType],
+			InitBond: initBond,
+			GameType: embedded.GameTypeSuperCannonKona,
+			FaultDisputeGameConfig: &embedded.FaultDisputeGameConfig{
+				AbsolutePrestate: superCannonKonaPrestate,
+			},
+		},
 		{
 			Enabled:             enabled[gameTypes.ZKDisputeGameType],
 			InitBond:            initBond,
@@ -168,40 +188,34 @@ func addGameTypesForRuntime(
 		}
 	}
 
-	artifactsFS, err := artifacts.Download(t.Ctx(), LocalArtifacts(t), ioutil.NoopProgressor(), t.TempDir())
-	require.NoError(err, "failed to download artifacts")
-
 	executeOPCMUpgrade(t, rpcClient, client, l1PAOKey, artifactsFS, embedded.UpgradeOPChainInput{
 		Prank: l1PAO,
 		Opcm:  l2Net.opcmImpl,
 		UpgradeInputV2: &embedded.UpgradeInputV2{
 			SystemConfig:       l2Net.deployment.SystemConfigProxyAddr(),
 			DisputeGameConfigs: configs,
-			ExtraInstructions: []embedded.ExtraInstruction{
-				{Key: "PermittedProxyDeployment", Data: []byte("DelayedWETH")},
-			},
+			ExtraInstructions:  extraInstructions,
 		},
 	})
 }
 
 // ZKDisputeGameConfigForRuntime returns a ZKDisputeGameConfig for use in devstack/test environments.
-// The verifier is set to address(0) as a placeholder; real deployments must supply a valid verifier.
-func ZKDisputeGameConfigForRuntime(t devtest.CommonT) *embedded.ZKDisputeGameConfig {
+// AbsolutePrestate is a fixed dummy hash — ZK proofs are never verified in devstack.
+func ZKDisputeGameConfigForRuntime() *embedded.ZKDisputeGameConfig {
 	return &embedded.ZKDisputeGameConfig{
-		AbsolutePrestate:     common.Hash{},    // placeholder for devstack
-		Verifier:             common.Address{}, // address(0) — external verifier not yet wired
-		MaxChallengeDuration: 604800,           // 7 days
-		MaxProveDuration:     259200,           // 3 days
-		ChallengerBond:       eth.GWei(80_000_000).ToBig(),
+		AbsolutePrestate:     common.Hash{0x01}, // dummy for devstack, not validated at claim time
+		MaxChallengeDuration: 604800,            // 7 days
+		MaxProveDuration:     259200,            // 3 days
+		ChallengerBond:       new(big.Int).Set(defaultZKChallengerBond),
 	}
 }
 
 func PrestateForGameType(t devtest.CommonT, gameType gameTypes.GameType) common.Hash {
 	switch gameType {
-	case gameTypes.CannonGameType:
-		return getAbsolutePrestate(t, "op-program/bin/prestate-proof-mt64.json")
 	case gameTypes.CannonKonaGameType:
 		return getCannonKonaAbsolutePrestate(t)
+	case gameTypes.SuperCannonKonaGameType:
+		return getAbsolutePrestate(t, "rust/kona/prestate-artifacts-cannon-interop/prestate-proof.json")
 	default:
 		t.Require().Fail("no prestate available for game type", gameType)
 		return common.Hash{}

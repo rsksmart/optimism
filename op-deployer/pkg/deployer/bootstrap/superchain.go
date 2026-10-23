@@ -19,11 +19,11 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
-	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log/logcli"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/urfave/cli/v2"
 )
@@ -78,9 +78,9 @@ func (c *SuperchainConfig) Check() error {
 }
 
 func SuperchainCLI(cliCtx *cli.Context) error {
-	logCfg := oplog.ReadCLIConfig(cliCtx)
-	l := oplog.NewLogger(oplog.AppOut(cliCtx), logCfg)
-	oplog.SetGlobalLogHandler(l.Handler())
+	logCfg := logcli.ReadCLIConfig(cliCtx)
+	l := logcli.NewLogger(logcli.AppOut(cliCtx), logCfg)
+	logcli.SetGlobalLogHandler(l.Handler())
 
 	l1RPCUrl := cliCtx.String(deployer.L1RPCURLFlagName)
 	privateKey := cliCtx.String(deployer.PrivateKeyFlagName)
@@ -118,41 +118,48 @@ func SuperchainCLI(cliCtx *cli.Context) error {
 		return fmt.Errorf("failed to write output: %w", err)
 	}
 
-	if !cliCtx.Bool(deployer.AutoVerifyFlag.Name) {
+	if cliCtx.Bool(deployer.NoVerifyFlag.Name) {
+		l.Warn("Contract verification skipped", "reason", "--no-verify was set")
 		return nil
 	}
 
 	verifyFile := outfile
-	if verifyFile == "" || verifyFile == "-" {
-		tmpFile, err := os.CreateTemp("", "op-deployer-superchain-*.json")
+	if err := func() error {
+		if verifyFile == "" || verifyFile == "-" {
+			tmpFile, err := os.CreateTemp("", "op-deployer-superchain-*.json")
+			if err != nil {
+				return fmt.Errorf("failed to create temp file for verification: %w", err)
+			}
+			tmpPath := tmpFile.Name()
+			tmpFile.Close()
+			defer os.Remove(tmpPath)
+			verifyFile = tmpPath
+			if err := jsonutil.WriteJSON(dso, ioutil.ToBasicFile(tmpPath, 0o644)); err != nil {
+				return fmt.Errorf("failed to write temp file for verification: %w", err)
+			}
+		}
+
+		chainID, err := deployer.ChainIDFromRPC(ctx, l1RPCUrl)
 		if err != nil {
-			return fmt.Errorf("failed to create temp file for verification: %w", err)
+			return fmt.Errorf("failed to get chain ID: %w", err)
 		}
-		tmpPath := tmpFile.Name()
-		tmpFile.Close()
-		defer os.Remove(tmpPath)
-		verifyFile = tmpPath
-		if err := jsonutil.WriteJSON(dso, ioutil.ToBasicFile(tmpPath, 0o644)); err != nil {
-			return fmt.Errorf("failed to write temp file for verification: %w", err)
-		}
-	}
 
-	chainID, err := deployer.ChainIDFromRPC(ctx, l1RPCUrl)
-	if err != nil {
-		return fmt.Errorf("failed to get chain ID: %w", err)
+		return verify.AutoVerify(
+			ctx,
+			l,
+			l1RPCUrl,
+			bigs.Uint64Strict(chainID),
+			verifyFile,
+			outfile,
+			cfg.ArtifactsLocator,
+			cliCtx.String(deployer.VerifierTypeFlagName),
+			cliCtx.String(deployer.VerifierUrlFlagName),
+			cliCtx.String(deployer.VerifierAPIKeyFlagName),
+		)
+	}(); err != nil {
+		verify.LogAutoVerifyFailure(l, outfile, err)
 	}
-
-	return verify.AutoVerify(
-		ctx,
-		l,
-		l1RPCUrl,
-		bigs.Uint64Strict(chainID),
-		verifyFile,
-		cfg.ArtifactsLocator,
-		cliCtx.String(deployer.VerifierTypeFlagName),
-		cliCtx.String(deployer.VerifierUrlFlagName),
-		cliCtx.String(deployer.VerifierAPIKeyFlagName),
-	)
+	return nil
 }
 
 func Superchain(ctx context.Context, cfg SuperchainConfig) (opcm.DeploySuperchainOutput, error) {
@@ -173,11 +180,6 @@ func Superchain(ctx context.Context, cfg SuperchainConfig) (opcm.DeploySuperchai
 		SuperchainProxyAdminOwner: cfg.SuperchainProxyAdminOwner,
 		Guardian:                  cfg.Guardian,
 		Paused:                    cfg.Paused,
-		// Non-zero placeholders for the deprecated ProtocolVersions* fields
-		// the Solidity script still asserts on. Removed in PR 2 of #20309.
-		ProtocolVersionsOwner:      cfg.SuperchainProxyAdminOwner,
-		RequiredProtocolVersion:    common.Hash{0x01},
-		RecommendedProtocolVersion: common.Hash{0x01},
 	}
 
 	if cfg.UseForge {

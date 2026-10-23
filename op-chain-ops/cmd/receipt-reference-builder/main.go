@@ -5,14 +5,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/term"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/log"
 
 	opservice "github.com/ethereum-optimism/optimism/op-service"
-	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log/logcli"
 )
 
 const EnvPrefix = "OP_CHAIN_OPS_RECEIPT_REFERENCE_BUILDER"
@@ -77,8 +77,8 @@ var (
 )
 
 func main() {
-	color := isatty.IsTerminal(os.Stderr.Fd())
-	oplog.SetGlobalLogHandler(log.NewTerminalHandlerWithLevel(os.Stdout, slog.LevelDebug, color))
+	color := term.IsTerminal(int(os.Stderr.Fd()))
+	logcli.SetGlobalLogHandler(log.NewTerminalHandlerWithLevel(os.Stdout, slog.LevelDebug, color))
 
 	app := &cli.App{
 		Name:   "receipt-reference-builder",

@@ -6,30 +6,77 @@ PYTHON := env('PYTHON', 'python3')
 
 TEST_TIMEOUT := env('TEST_TIMEOUT', '10m')
 
-TEST_PKGS := "./op-alt-da/... ./op-batcher/... ./op-chain-ops/... ./op-core/... ./op-node/... ./op-proposer/... ./op-challenger/... ./op-faucet/... ./op-dispute-mon/... ./op-conductor/... ./op-program/... ./op-service/... ./op-supervisor/... ./op-test-sequencer/... ./op-fetcher/... ./op-e2e/system/... ./op-e2e/e2eutils/... ./op-e2e/opgeth/... ./op-e2e/interop/... ./op-e2e/actions/altda ./op-e2e/actions/batcher ./op-e2e/actions/derivation ./op-e2e/actions/helpers ./op-e2e/actions/interop ./op-e2e/actions/proofs ./op-e2e/actions/proposer ./op-e2e/actions/safedb ./op-e2e/actions/sequencer ./op-e2e/actions/sync ./op-e2e/actions/upgrades ./packages/contracts-bedrock/scripts/checks/... ./ops/scripts/... ./op-dripper/... ./op-devstack/... ./op-deployer/pkg/deployer/artifacts/... ./op-deployer/pkg/deployer/broadcaster/... ./op-deployer/pkg/deployer/clean/... ./op-deployer/pkg/deployer/integration_test/ ./op-deployer/pkg/deployer/integration_test/cli/... ./op-deployer/pkg/deployer/standard/... ./op-deployer/pkg/deployer/state/... ./op-deployer/pkg/deployer/verify/... ./op-sync-tester/... ./op-supernode/..."
+# Go test runs cover every package in the module except these, which run in
+# dedicated CI jobs or can't run in the standard go-tests environment:
+#   op-acceptance-tests             dedicated acceptance-test job (needs a running devnet)
+#   cannon                          dedicated cannon job (slow MIPS emulation tests)
+#   rust                            rust-e2e pipeline (needs prebuilt Rust binaries)
+#   op-deployer/pkg/deployer/forge  fails when forge is on PATH (ethereum-optimism/optimism#21200)
+# See the list-test-packages recipe, which expands `go list ./...` minus these.
+EXCLUDED_TEST_PKGS := "op-acceptance-tests cannon rust op-deployer/pkg/deployer/forge"
 
+# Fault-proof packages run in the default go-tests job and again in a dedicated
+# job with Cannon enabled, so they keep a separate list.
 FRAUD_PROOF_TEST_PKGS := "./op-e2e/faultproofs/..."
-
-RPC_TEST_PKGS := "./op-validator/pkg/validations/... ./op-deployer/pkg/deployer/bootstrap/... ./op-deployer/pkg/deployer/manage/... ./op-deployer/pkg/deployer/opcm/... ./op-deployer/pkg/deployer/pipeline/... ./op-deployer/pkg/deployer/upgrade/..."
-
-ALL_TEST_PACKAGES := TEST_PKGS + " " + RPC_TEST_PKGS + " " + FRAUD_PROOF_TEST_PKGS
 
 # Lists all available targets.
 help:
   @just --list
 
-# Builds op-core/superchain/superchain-configs.zip from the pinned commit in
-# op-core/superchain/superchain-registry-commit.txt. The zip is gitignored;
-# this recipe is the way to (re)materialise it for builds and tests. Skips work
-# if the existing zip already pins the same commit.
-sync-superchain:
+# Install the repo's git hooks (core.hooksPath -> .githooks). Idempotent; run once per clone.
+install-git-hooks:
+  git config core.hooksPath .githooks
+  @echo "Installed git hooks: core.hooksPath -> .githooks"
+
+# Initializes/updates the superchain-registry submodule — the single canonical SR
+# commit pin. Scoped to ONLY this submodule (never a bare `git submodule update`).
+# With no ref it initializes at the pinned commit (shallow) and leaves an
+# already-present checkout untouched; with a ref (tag or commit sha) it moves the
+# submodule there.
+[script('bash')]
+update-superchain-registry-submodule ref="":
+  set -euo pipefail
+  # Check out the submodule at the pinned (gitlink) commit, initializing it if
+  # absent and resetting a stale or dirty working tree (--force).
+  git submodule update --init --force --depth 1 -- superchain-registry
+  if [ -n "{{ref}}" ]; then
+    # Move it to the requested ref and stage the new gitlink so the subsequent
+    # (no-ref) syncs treat that as the pinned commit instead of resetting it.
+    git -C superchain-registry fetch --depth 1 origin "{{ref}}"
+    git -C superchain-registry checkout --detach FETCH_HEAD
+    git add superchain-registry
+  fi
+
+# Builds op-core/superchain/superchain-configs.zip (gitignored) from the
+# superchain-registry submodule. Lightweight; this is the recipe the Go build/test
+# targets depend on. Verify mode: skips work if the existing zip already matches the
+# committed .sha256, otherwise regenerates and asserts it still matches (failing on drift).
+build-superchain-go: update-superchain-registry-submodule
   bash op-core/superchain/sync-superchain.sh
+
+# Regenerates op-core/superchain/superchain-configs.zip AND rewrites its committed
+# .sha256 from the submodule — build-superchain-go in refresh mode. Sibling of
+# sync-superchain-rust; both are run by sync-superchain when bumping the registry.
+sync-superchain-go:
+  @OP_CORE_SYNC_SUPERCHAIN=1 just build-superchain-go
+
+# Regenerates the committed Rust artifacts from the submodule: kona's etc/*.json
+# (via KONA_SYNC_SUPERCHAIN) and op-reth's superchain-configs.tar.sha256 +
+# chain_specs.rs (via OP_RETH_SYNC_SUPERCHAIN; the tar itself is gitignored).
+sync-superchain-rust: update-superchain-registry-submodule
+  cd rust && KONA_SYNC_SUPERCHAIN=true cargo build -p kona-registry
+  cd rust && OP_RETH_SYNC_SUPERCHAIN=1 cargo build -p reth-optimism-chainspec --features superchain-configs
+
+# One-command superchain-registry sync. With a ref (tag or commit sha) it moves the
+# submodule there first, then regenerates every dependent artifact (Go + Rust), so
+# the submodule pointer and the committed artifacts can never drift out of sync.
+sync-superchain ref="": (update-superchain-registry-submodule ref) sync-superchain-go sync-superchain-rust
 
 # Builds Go components and contracts-bedrock.
 build: build-go build-contracts
 
 # Builds main Go components.
-build-go: submodules op-node op-proposer op-batcher op-challenger op-dispute-mon op-program cannon
+build-go: submodules build-superchain-go op-node op-proposer op-batcher op-challenger op-dispute-mon cannon
 
 # Builds contracts-bedrock.
 build-contracts:
@@ -40,7 +87,7 @@ build-customlint:
   cd linter && just build
 
 # Lints Go code with specific linters.
-lint-go: build-customlint
+lint-go: build-customlint build-superchain-go
   ./linter/bin/op-golangci-lint run ./...
   go mod tidy -diff
 
@@ -50,7 +97,7 @@ fmt-check *files: build-customlint
   ./linter/bin/op-golangci-lint fmt --diff {{files}}
 
 # Lints Go code with specific linters and fixes reported issues.
-lint-go-fix: build-customlint
+lint-go-fix: build-customlint build-superchain-go
   ./linter/bin/op-golangci-lint run ./... --fix
 
 # Checks that op-geth version in go.mod is valid.
@@ -59,7 +106,7 @@ check-op-geth-version:
 
 # Builds Docker images for Go components using buildx.
 [script('bash')]
-golang-docker:
+golang-docker: update-superchain-registry-submodule
   set -euo pipefail
   GIT_COMMIT=$(git rev-parse HEAD) \
   GIT_DATE=$(git show -s --format='%ct') \
@@ -68,7 +115,34 @@ golang-docker:
       --progress plain \
       --load \
       -f docker-bake.hcl \
-      op-node op-batcher op-proposer op-challenger op-dispute-mon op-supervisor
+      op-node op-batcher op-proposer op-challenger op-dispute-mon
+
+# Builds selected Docker image targets using buildx.
+[private]
+[script('bash')]
+docker-bake targets: update-superchain-registry-submodule
+  set -euo pipefail
+  GIT_COMMIT=$(git rev-parse HEAD)
+  GIT_DATE=$(git show -s --format='%ct')
+  IMAGE_TAGS=${IMAGE_TAGS:-$GIT_COMMIT,latest}
+  read -ra bake_targets <<< "{{targets}}"
+  GIT_COMMIT="$GIT_COMMIT" \
+  GIT_DATE="$GIT_DATE" \
+  IMAGE_TAGS="$IMAGE_TAGS" \
+  docker buildx bake \
+      --progress plain \
+      --load \
+      -f docker-bake.hcl \
+      "${bake_targets[@]}"
+
+# Builds Docker image for op-node using buildx.
+op-node-docker: (docker-bake "op-node")
+
+# Builds Docker image for op-batcher using buildx.
+op-batcher-docker: (docker-bake "op-batcher")
+
+# Builds the requested local Docker images for op-node and op-batcher.
+op-stack-go-requested-docker: (docker-bake "op-node op-batcher")
 
 # Removes the Docker buildx builder.
 docker-builder-clean:
@@ -190,42 +264,36 @@ op-supernode:
 op-interop-filter:
   just ./op-interop-filter/op-interop-filter
 
-# Builds op-program binary.
-op-program:
-  cd op-program && just op-program
-
 # Builds cannon binary.
 cannon:
   cd cannon && just cannon
 
-# Builds reproducible prestate for op-program.
-reproducible-prestate-op-program:
-  cd op-program && just build-reproducible-prestate
-
-# Builds reproducible prestate for kona.
+# Builds the reproducible kona prestates (all variants).
 reproducible-prestate-kona:
   cd rust && just build-kona-reproducible-prestate
 
-# Builds reproducible prestates for op-program and kona in parallel.
+# Builds the reproducible kona prestates and prints their hashes.
 [script('bash')]
 reproducible-prestate:
   set -euo pipefail
-  (cd op-program && just build-reproducible-prestate) &
-  pid1=$!
-  (cd rust && just build-kona-reproducible-prestate) &
-  pid2=$!
-  wait "$pid1" "$pid2"
-  (cd op-program && just output-prestate-hash)
+  (cd rust && just build-kona-reproducible-prestate)
   (cd rust && just output-kona-prestate-hash)
 
-# Builds cannon prestates.
-cannon-prestates: cannon op-program
-  go run ./op-program/builder/main.go build-all-prestates
+# Builds the kona prestates, natively when the MIPS64 cross-linker is installed and via Docker otherwise.
+cannon-prestates:
+  cd rust && just build-kona-prestates-auto
+
+# Rebuilds registered Kona SP1 releases and released Cannon prestates, then
+# compares both against one standard-prestates registry snapshot.
+verify-reproducibility:
+  rm -rf ops/prestate-reproducibility/temp/states
+  ./ops/prestate-reproducibility/build-prestates.sh
+  env GO111MODULE=on go run ./ops/prestate-reproducibility/prestates/verify/verify.go --input ops/prestate-reproducibility/temp/states/versions.json --expected ops/prestate-reproducibility/temp/states/standard-prestates.toml
 
 # Cleans up unused dependencies in Go modules.
 # Bypasses the Go module proxy for freshly released versions.
 # See https://proxy.golang.org/ for more info.
-mod-tidy:
+mod-tidy: build-superchain-go
   GOPRIVATE="github.com/ethereum-optimism" go mod tidy
 
 # Removes all generated files under bin/.
@@ -256,45 +324,44 @@ semgrep-ci:
   DEV_REF=$(git rev-parse develop)
   SEMGREP_REPO_NAME=ethereum-optimism/optimism semgrep ci --baseline-commit="$DEV_REF"
 
-# Builds op-program-client binary.
-op-program-client:
-  cd op-program && just op-program-client
-
-# Builds op-program-host binary.
-op-program-host:
-  cd op-program && just op-program-host
-
 # Makes pre-test setup.
 make-pre-test:
   cd op-e2e && just pre-test
 
+# Lists the Go packages under test: every package in the module except those in
+# EXCLUDED_TEST_PKGS (which run in dedicated CI jobs or can't run in this environment).
+[script('bash')]
+list-test-packages:
+  set -euo pipefail
+  go list -e ./... | grep -vE "^github.com/ethereum-optimism/optimism/($(echo '{{EXCLUDED_TEST_PKGS}}' | tr ' ' '|'))(/|$)"
+
 # Runs comprehensive Go tests across all packages.
 [script('bash')]
-go-tests: op-program-client op-program-host cannon build-contracts cannon-prestates make-pre-test
+go-tests: cannon build-contracts make-pre-test build-superchain-go
   set -euo pipefail
   export ENABLE_KURTOSIS=true
   export OP_E2E_CANNON_ENABLED="false"
   export OP_E2E_USE_HTTP=true
   export ENABLE_ANVIL=true
   export PARALLEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-  go test -parallel="$PARALLEL" -timeout={{TEST_TIMEOUT}} {{TEST_PKGS}}
+  go test -parallel="$PARALLEL" -timeout={{TEST_TIMEOUT}} $(just list-test-packages)
 
 # Runs comprehensive Go tests with -short flag.
 [script('bash')]
-go-tests-short: op-program-client op-program-host cannon build-contracts cannon-prestates make-pre-test
+go-tests-short: cannon build-contracts make-pre-test build-superchain-go
   set -euo pipefail
   export ENABLE_KURTOSIS=true
   export OP_E2E_CANNON_ENABLED="false"
   export OP_E2E_USE_HTTP=true
   export ENABLE_ANVIL=true
   export PARALLEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-  go test -short -parallel="$PARALLEL" -timeout={{TEST_TIMEOUT}} {{TEST_PKGS}}
+  go test -short -parallel="$PARALLEL" -timeout={{TEST_TIMEOUT}} $(just list-test-packages)
 
 # Internal: runs Go tests with gotestsum for CI.
 [script('bash')]
-_go-tests-ci-internal go_test_flags="":
+_go-tests-ci-internal go_test_flags="": build-superchain-go
   set -euo pipefail
-  (cd cannon && just cannon elf)
+  (cd cannon && just diff-hello-elf)
   echo "Setting up test directories..."
   mkdir -p ./tmp/test-results ./tmp/testlogs
   echo "Running Go tests with gotestsum..."
@@ -307,32 +374,46 @@ _go-tests-ci-internal go_test_flags="":
   source ./ops/scripts/source-ci-archive-rpcs.sh
   export NAT_INTEROP_LOADTEST_TARGET=10
   export NAT_INTEROP_LOADTEST_TIMEOUT=30s
-  ALL_PACKAGES="{{ALL_TEST_PACKAGES}}"
+  ALL_PACKAGES="$(just list-test-packages | tr '\n' ' ')"
   if [ -n "${CIRCLE_NODE_TOTAL:-}" ] && [ "$CIRCLE_NODE_TOTAL" -gt 1 ]; then
       NODE_INDEX=${CIRCLE_NODE_INDEX:-0}
       NODE_TOTAL=${CIRCLE_NODE_TOTAL:-1}
-      PARALLEL_PACKAGES=$(echo "$ALL_PACKAGES" | tr ' ' '\n' | awk -v idx="$NODE_INDEX" -v total="$NODE_TOTAL" 'NR % total == idx' | tr '\n' ' ')
-      if [ -n "$PARALLEL_PACKAGES" ]; then
-          echo "Node $NODE_INDEX/$NODE_TOTAL running packages: $PARALLEL_PACKAGES"
-          ./ops/scripts/gotestsum-split.sh --format=testname \
-              --junitfile=./tmp/test-results/results-"$NODE_INDEX".xml \
-              --jsonfile=./tmp/testlogs/log-"$NODE_INDEX".json \
-              --rerun-fails=3 \
-              --rerun-fails-max-failures=50 \
-              --packages="$PARALLEL_PACKAGES" \
-              -- -parallel="$PARALLEL" -coverprofile=coverage-"$NODE_INDEX".out {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
-      else
-          echo "ERROR: Node $NODE_INDEX/$NODE_TOTAL has no packages to run! Perhaps parallelism is set too high? (ALL_TEST_PACKAGES has $(echo "$ALL_PACKAGES" | wc -w) packages)"
+      if [ -z "${ALL_PACKAGES// /}" ]; then
+          echo "ERROR: list-test-packages produced no packages" >&2
           exit 1
       fi
+      # Split by historical timing instead of round-robin: timing-balanced
+      # packing keyed on the JUnit classname (= Go import path) that gotestsum
+      # uploads via store_test_results. list-test-packages already emits one
+      # concrete import path per line; `circleci tests split` reads
+      # CIRCLE_NODE_TOTAL/INDEX itself and falls back to name-based splitting
+      # for packages with no timing data yet.
+      PARALLEL_PACKAGES=$(printf '%s\n' $ALL_PACKAGES \
+          | circleci tests split --split-by=timings --timings-type=classname \
+          | tr '\n' ' ')
+      # An empty share for one node is a legitimate timing-bucketing outcome;
+      # the packages run on the other nodes. Only an empty package list
+      # (checked above) means the job would silently test nothing.
+      if [ -z "${PARALLEL_PACKAGES// /}" ]; then
+          echo "No packages assigned to node $NODE_INDEX/$NODE_TOTAL, skipping."
+          exit 0
+      fi
+      echo "Node $NODE_INDEX/$NODE_TOTAL running packages: $PARALLEL_PACKAGES"
+      ./ops/scripts/gotestsum-split.sh --format=standard-verbose \
+          --junitfile=./tmp/test-results/results-"$NODE_INDEX".xml \
+          --jsonfile=./tmp/testlogs/log-"$NODE_INDEX".json \
+          --rerun-fails=3 \
+          --rerun-fails-max-failures=50 \
+          --packages="$PARALLEL_PACKAGES" \
+          -- -p=4 -parallel="$PARALLEL" {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
   else
-      ./ops/scripts/gotestsum-split.sh --format=testname \
+      ./ops/scripts/gotestsum-split.sh --format=standard-verbose \
           --junitfile=./tmp/test-results/results.xml \
           --jsonfile=./tmp/testlogs/log.json \
           --rerun-fails=3 \
           --rerun-fails-max-failures=50 \
           --packages="$ALL_PACKAGES" \
-          -- -parallel="$PARALLEL" -coverprofile=coverage.out {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
+          -- -p=4 -parallel="$PARALLEL" {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
   fi
 
 # Runs short Go tests with gotestsum for CI.
@@ -359,13 +440,13 @@ go-tests-fraud-proofs-ci:
   source ./ops/scripts/source-ci-archive-rpcs.sh
   export NAT_INTEROP_LOADTEST_TARGET=10
   export NAT_INTEROP_LOADTEST_TIMEOUT=30s
-  ./ops/scripts/gotestsum-split.sh --format=testname \
+  ./ops/scripts/gotestsum-split.sh --format=standard-verbose \
       --junitfile=./tmp/test-results/results.xml \
       --jsonfile=./tmp/testlogs/log.json \
       --rerun-fails=3 \
       --rerun-fails-max-failures=50 \
       --packages="{{FRAUD_PROOF_TEST_PKGS}}" \
-      -- -parallel="$PARALLEL" -coverprofile=coverage.out -timeout={{TEST_TIMEOUT}}
+      -- -parallel="$PARALLEL" -timeout={{TEST_TIMEOUT}}
 
 # Runs comprehensive Go tests (alias for go-tests).
 test: go-tests
@@ -375,14 +456,32 @@ update-op-geth:
   ./ops/scripts/update-op-geth.py
 
 # Build all Rust binaries (release) for sysgo tests.
+# Every binary needs an explicit `-p`: a bare `--bin` only resolves against the
+# `default-members` of the workspace, and op-reth-sdm-fixture is a plain member.
 build-rust-release:
-  cd rust && cargo build --release --bin kona-node --bin kona-host --bin op-reth
-  cd op-rbuilder && cargo build --release -p op-rbuilder --bin op-rbuilder
-  cd rollup-boost && cargo build --release -p rollup-boost --bin rollup-boost
+  cd rust && cargo build --release -p kona-node --bin kona-node -p kona-host --bin kona-host -p op-reth --bin op-reth -p op-reth-sdm-fixture --bin op-reth-sdm-fixture
 
 # Checks that locked NUT bundles have not been modified.
 check-nut-locks:
   go run ./ops/scripts/check-nut-locks
+
+# Checks that committed NUT pre-fork states regenerate without drift. Assumes required build artifacts are present.
+[script('bash')]
+_check-nut-prefork-states:
+  set -euo pipefail
+  shopt -s nullglob
+  for state in op-core/nuts/state/*_state.json; do
+    fork="$(basename "$state" _state.json)"
+    if [ "$fork" = "jovian" ]; then
+      continue
+    fi
+    just _nut-prefork-state-for "$fork"
+  done
+  git diff --exit-code -- op-core/nuts/state/*_state.json
+
+# Checks that committed NUT pre-fork states regenerate without drift.
+check-nut-prefork-states: build-contracts build-superchain-go
+  just _check-nut-prefork-states
 
 # Snapshots current-upgrade-bundle.json as a fork's NUT bundle and updates the lock file.
 nut-snapshot-for fork:
@@ -392,6 +491,13 @@ nut-snapshot-for fork:
 nut-provenance-verify fork:
   go run ./ops/scripts/nut-provenance-verify {{fork}}
 
+# Generates op-core/nuts/state/<fork>_state.json (predecessor state + frozen <fork> bundle).
+_nut-prefork-state-for fork:
+  OP_E2E_GEN_PREFORK_STATE={{fork}} go test -count=1 -run TestGenerateForkState ./rust/kona/tests/proofs/
+
+# Generates op-core/nuts/state/<fork>_state.json (predecessor state + frozen <fork> bundle).
+nut-prefork-state-for fork: build-contracts build-superchain-go
+  just _nut-prefork-state-for {{fork}}
 
 # Checks that TODO comments have corresponding issues.
 todo-checker:
@@ -441,6 +547,84 @@ latest-tag component:
 latest-rc-tag component:
     @git tag -l '{{ component }}/v*' --sort=-v:refname | grep -E '^[^/]+/v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | head -1
 
+# Prints the repository paths that ship in a component — the single source of
+# truth for "what belongs to <component>", defined next to the code it describes.
+# Release notes read it, and so does the proofs release tooling, so a component's
+# paths are never restated anywhere else.
+#
+# Output is one `<label><TAB><path>` pair per line. Consecutive lines sharing a
+# label form a group: a set of paths that ship as one unit — a bundled binary's
+# dependency closure, or the shared infrastructure every Go component links.
+# Consumers that section their output group by label, keeping a closure from
+# swamping the component's own changes; consumers that only need the path set
+# read the second column. Emitting both in one stream means a component's paths
+# and their grouping cannot disagree.
+#
+# A directory is written as a plain prefix ("cannon/"), not a glob, because the
+# two disagree: as a git pathspec, `cannon/**/*` skips files sitting directly in
+# cannon/ (README.md, Dockerfile.diff) since `**/` needs an intervening
+# directory. Consumers needing a glob append `**/*` themselves — release-notes
+# does, for git-cliff.
+#
+#   just release-paths op-challenger
+[script('bash')]
+release-paths component:
+    set -euo pipefail
+    # Shared Go infrastructure linked into every Go binary.
+    go_shared="shared=go.*,op-core/,op-service/"
+    # kona-host's local-path dependency closure per `cargo metadata`, excluding
+    # rust/kona/crates/node/ because kona-node is a separate binary. rust/Cargo.toml
+    # is included because a dependency bump reaches the binary; a bump touching only
+    # rust/Cargo.lock still appears under no path here.
+    kona_host="kona-host=rust/Cargo.toml,rust/kona/bin/host/,rust/kona/crates/proof/,rust/kona/crates/protocol/,rust/kona/crates/providers/,rust/kona/crates/utilities/,rust/alloy-op-evm/,rust/alloy-op-hardforks/,rust/op-alloy/,rust/op-revm/"
+    specs=()
+    case "{{ component }}" in
+        op-node|op-batcher|op-proposer|op-supernode|op-dispute-mon)
+            specs=("{{ component }}/" "$go_shared")
+            ;;
+        op-challenger)
+            # The op-challenger image ships three binaries, so all three are
+            # release-relevant: op-challenger itself, the cannon VM, and kona-host
+            # built from the in-repo rust/ workspace. See the op-challenger-target
+            # stage in ops/docker/op-stack-go/Dockerfile. A kona-host-only fix has
+            # no op-challenger/ diff yet still changes what operators run.
+            # kona-client is not in the image — it ships as a prestate hash.
+            specs=("op-challenger/" "cannon/" "$kona_host" "$go_shared")
+            ;;
+        op-reth)
+            specs=("rust/{{ component }}/" "rust/Cargo.toml" "rust/op-alloy/" "rust/alloy-op-evm/" "rust/alloy-op-hardforks/")
+            ;;
+        kona-*)
+            specs=("rust/kona/" "rust/Cargo.toml" "rust/op-alloy/" "rust/alloy-op-evm/" "rust/alloy-op-hardforks/" "rust/op-revm/")
+            ;;
+        op-deployer)
+            specs=("op-deployer/")
+            ;;
+        op-contracts)
+            specs=("packages/contracts-bedrock/")
+            ;;
+        *)
+            echo "error: component must be one of: op-node, op-batcher, op-proposer, op-challenger, op-dispute-mon, op-reth, op-deployer, op-contracts, op-supernode, kona-*; is {{ component }}" >&2
+            exit 1
+            ;;
+    esac
+    # `label=a,b` is private to this recipe: it is expanded to labelled pairs
+    # here, so no consumer ever has to know the separators.
+    for spec in "${specs[@]}"; do
+        if [[ "$spec" == *=* ]]; then
+            label="${spec%%=*}"
+            group="${spec#*=}"
+        else
+            # A lone path is its own section; "cannon/" reads as cannon.
+            label="${spec%/}"
+            group="$spec"
+        fi
+        IFS=',' read -r -a group_paths <<< "$group"
+        for p in "${group_paths[@]}"; do
+            printf '%s\t%s\n' "$label" "$p"
+        done
+    done
+
 # Generates release notes between two tags using git-cliff.
 # <from> and <to> can be explicit tags (e.g. v1.16.5), or:
 #   'latest'    - resolves to the latest stable tag (vX.Y.Z)
@@ -474,37 +658,19 @@ release-notes component from='latest' to='latest-rc' mode='':
     }
     from_tag=$(resolve_tag "{{ from }}")
     if [ -z "$from_tag" ]; then echo "error: could not resolve from tag '{{ from }}' for {{ component }}"; exit 1; fi
+    # release-paths is the single source of truth for what ships in a component.
+    # Assigning first (rather than piping) so `set -e` aborts on an unknown one.
+    component_paths="$({{ just_executable() }} --justfile {{ justfile() }} release-paths "{{ component }}")"
     include_path_args=()
-    case "{{ component }}" in
-        op-node|op-batcher|op-proposer|op-challenger)
-            include_path_args=(
-                --include-path "{{ component }}/**/*"
-                --include-path "go.*"
-                --include-path "op-core/**/*"
-                --include-path "op-service/**/*"
-            )
-            ;;
-        op-reth)
-            include_path_args=(
-                --include-path "rust/{{ component }}/**/*"
-                --include-path "rust/Cargo.toml"
-                --include-path "rust/op-alloy/**/*"
-                --include-path "rust/alloy-op*/**/*"
-            )
-            ;;
-        kona-*)
-            include_path_args=(
-                --include-path "rust/kona/**/*"
-                --include-path "rust/Cargo.toml"
-                --include-path "rust/op-alloy/**/*"
-                --include-path "rust/alloy-op*/**/*"
-            )
-            ;;
-        *)
-            echo "error: component must be one of: op-node, op-batcher, op-proposer, op-challenger, op-reth, kona-*; is {{ component }}"
-            exit 1
-            ;;
-    esac
+    # Second column only — the label just names a section, which notes don't use.
+    # Not `path`: this recipe is zsh, where $path is tied to $PATH and reading
+    # into it empties PATH, so every later command silently vanishes.
+    while IFS=$'\t' read -r _label include_path; do
+        [ -z "$include_path" ] && continue
+        # release-paths yields directories as prefixes; git-cliff wants globs.
+        case "$include_path" in */) include_path="${include_path}**/*" ;; esac
+        include_path_args+=(--include-path "$include_path")
+    done <<< "$component_paths"
     tag_args=()
     if [ "{{ to }}" = "develop" ]; then
         tag_args=(--unreleased)
@@ -527,3 +693,7 @@ release-notes component from='latest' to='latest-rc' mode='':
         "${tag_args[@]}" \
         "${offline_args[@]}" \
         -- "${from_tag}..${range_end}"
+
+# Run the rust-code-reviewer agent over the current branch (delegates to rust/justfile).
+rust-review base='':
+  cd rust && just rust-review "{{base}}"

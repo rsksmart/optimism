@@ -2,6 +2,7 @@ package batcher
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"math/rand"
@@ -14,11 +15,11 @@ import (
 	derivetest "github.com/ethereum-optimism/optimism/op-node/rollup/derive/test"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/queue"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,12 +83,12 @@ func ChannelManagerReturnsErrReorg(t *testing.T, batchType uint) {
 		ParentHash: common.Hash{0xff},
 	}, nil, nil, nil, types.DefaultBlockConfig)
 
-	require.NoError(t, m.AddL2Block(a))
-	require.NoError(t, m.AddL2Block(b))
-	require.NoError(t, m.AddL2Block(c))
-	require.ErrorIs(t, m.AddL2Block(x), ErrReorg)
+	require.NoError(t, m.AddL2Block(mustPayloadFromGeth(a)))
+	require.NoError(t, m.AddL2Block(mustPayloadFromGeth(b)))
+	require.NoError(t, m.AddL2Block(mustPayloadFromGeth(c)))
+	require.ErrorIs(t, m.AddL2Block(mustPayloadFromGeth(x)), ErrReorg)
 
-	require.Equal(t, queue.Queue[SizedBlock]{ToSizedBlock(a), ToSizedBlock(b), ToSizedBlock(c)}, m.blocks)
+	require.Equal(t, queue.Queue[SizedBlock]{mustSizedBlockFromGeth(a), mustSizedBlockFromGeth(b), mustSizedBlockFromGeth(c)}, m.blocks)
 }
 
 // ChannelManagerReturnsErrReorgWhenDrained ensures that the channel manager
@@ -102,14 +103,14 @@ func ChannelManagerReturnsErrReorgWhenDrained(t *testing.T, batchType uint) {
 	a := newMiniL2Block(0)
 	x := newMiniL2BlockWithNumberParent(0, big.NewInt(1), common.Hash{0xff})
 
-	require.NoError(t, m.AddL2Block(a))
+	require.NoError(t, m.AddL2Block(mustPayloadFromGeth(a)))
 
-	_, err := m.TxData(eth.BlockID{}, false, pubInfo{})
+	_, err := m.TxData(testL1Head(0), false, pubInfo{})
 	require.NoError(t, err)
-	_, err = m.TxData(eth.BlockID{}, false, pubInfo{})
+	_, err = m.TxData(testL1Head(0), false, pubInfo{})
 	require.ErrorIs(t, err, io.EOF)
 
-	require.ErrorIs(t, m.AddL2Block(x), ErrReorg)
+	require.ErrorIs(t, m.AddL2Block(mustPayloadFromGeth(x)), ErrReorg)
 }
 
 // ChannelManager_Clear tests clearing the channel manager.
@@ -144,7 +145,7 @@ func ChannelManager_Clear(t *testing.T, batchType uint) {
 		Hash:   a.Hash(),
 		Number: a.NumberU64(),
 	}
-	require.NoError(m.AddL2Block(a))
+	require.NoError(m.AddL2Block(mustPayloadFromGeth(a)))
 
 	// Make sure there is a channel
 	require.NoError(m.ensureChannelWithSpace(l1BlockID))
@@ -169,7 +170,7 @@ func ChannelManager_Clear(t *testing.T, batchType uint) {
 		Number:     big.NewInt(1),
 		ParentHash: a.Hash(),
 	}, nil, nil, nil, types.DefaultBlockConfig)
-	require.NoError(m.AddL2Block(b))
+	require.NoError(m.AddL2Block(mustPayloadFromGeth(b)))
 	require.Equal(m.blockCursor, len(m.blocks)-1)
 	require.Equal(b.Hash(), m.tip)
 
@@ -178,7 +179,7 @@ func ChannelManager_Clear(t *testing.T, batchType uint) {
 	}
 
 	// Artificially pump up some metrics which need to be cleared
-	A := ToSizedBlock(a)
+	A := mustSizedBlockFromGeth(a)
 	m.metr.RecordL2BlockInPendingQueue(A.RawSize(), A.EstimatedDABytes())
 	require.NotZero(m.metr.PendingDABytes())
 
@@ -206,9 +207,9 @@ func ChannelManager_TxResend(t *testing.T, batchType uint) {
 
 	a := derivetest.RandomL2BlockWithChainId(rng, 4, defaultTestRollupConfig.L2ChainID)
 
-	require.NoError(m.AddL2Block(a))
+	require.NoError(m.AddL2Block(mustPayloadFromGeth(a)))
 
-	txdata0, err := m.TxData(eth.BlockID{}, false, pubInfo{})
+	txdata0, err := m.TxData(testL1Head(0), false, pubInfo{})
 	require.NoError(err)
 	txdata0bytes := txdata0.CallData()
 	data0 := make([]byte, len(txdata0bytes))
@@ -216,13 +217,13 @@ func ChannelManager_TxResend(t *testing.T, batchType uint) {
 	copy(data0, txdata0bytes)
 
 	// ensure channel is drained
-	_, err = m.TxData(eth.BlockID{}, false, pubInfo{})
+	_, err = m.TxData(testL1Head(0), false, pubInfo{})
 	require.ErrorIs(err, io.EOF)
 
 	// requeue frame
 	m.TxFailed(txdata0.ID())
 
-	txdata1, err := m.TxData(eth.BlockID{}, false, pubInfo{})
+	txdata1, err := m.TxData(testL1Head(0), false, pubInfo{})
 	require.NoError(err)
 
 	data1 := txdata1.CallData()
@@ -283,10 +284,13 @@ type FakeDynamicEthChannelConfig struct {
 	DynamicEthChannelConfig
 	chooseBlobs bool
 	assessments int
+	// amsterdamArgs records the isAmsterdam argument of every assessment.
+	amsterdamArgs []bool
 }
 
-func (f *FakeDynamicEthChannelConfig) ChannelConfig(isThrottling bool) ChannelConfig {
+func (f *FakeDynamicEthChannelConfig) ChannelConfig(isThrottling bool, isAmsterdam bool) ChannelConfig {
 	f.assessments++
+	f.amsterdamArgs = append(f.amsterdamArgs, isAmsterdam)
 	if f.chooseBlobs {
 		return f.blobConfig
 	}
@@ -334,31 +338,63 @@ func TestChannelManager_IgnoreMaxChannelDuration(t *testing.T) {
 	rng := rand.New(rand.NewSource(99))
 	for range 2 {
 		block := derivetest.RandomL2BlockWithChainId(rng, 2, defaultTestRollupConfig.L2ChainID)
-		m.blocks.Enqueue(SizedBlock{Block: block})
+		m.blocks.Enqueue(mustSizedBlockFromGeth(block))
 	}
 
 	// Call TxData a first time - if `ignoreMaxChannelDuration` is `false`, channel would be timed out,
 	// but since `ignoreMaxChannelDuration` is `true`, we expect it to be not timed out.
-	_, err := m.TxData(eth.BlockID{Number: 21}, false, pubInfo{ignoreMaxChannelDuration: true})
+	_, err := m.TxData(testL1Head(21), false, pubInfo{ignoreMaxChannelDuration: true})
 	require.ErrorIs(t, err, io.EOF)
 
 	// Add more blocks to the channel manager
 	for range 2 {
 		block := derivetest.RandomL2BlockWithChainId(rng, 2, defaultTestRollupConfig.L2ChainID)
-		m.blocks.Enqueue(SizedBlock{Block: block})
+		m.blocks.Enqueue(mustSizedBlockFromGeth(block))
 	}
 
 	require.NotEmpty(t, m.channelQueue)
 	require.False(t, m.channelQueue[0].IsFull())
 
 	// Call TxData again, with ignoreMaxChannelDuration unset.
-	_, err = m.TxData(eth.BlockID{Number: 22}, false, pubInfo{})
+	_, err = m.TxData(testL1Head(22), false, pubInfo{})
 	require.NoError(t, err)
 	require.NotEmpty(t, m.channelQueue)
 
 	// Given that ignoreMaxChannelDuration was unset, the channel should be timed out
 	require.True(t, m.channelQueue[0].IsFull())
 	require.ErrorIs(t, m.channelQueue[0].FullErr(), ErrMaxDurationReached)
+}
+
+// testL1Head returns a minimal pre-Amsterdam L1 header at the given number.
+func testL1Head(number uint64) *types.Header {
+	return &types.Header{Number: new(big.Int).SetUint64(number)}
+}
+
+// TestChannelManager_TxData_AmsterdamFromL1Head asserts that TxData assesses the DA type under the
+// fork rules active at the given L1 head.
+func TestChannelManager_TxData_AmsterdamFromL1Head(t *testing.T) {
+	for _, isAmsterdam := range []bool{false, true} {
+		t.Run(fmt.Sprintf("amsterdam=%t", isAmsterdam), func(t *testing.T) {
+			l := testlog.Logger(t, log.LevelCrit)
+			cfg := newFakeDynamicEthChannelConfig(l, 1000)
+			m := NewChannelManager(l, metrics.NoopMetrics, cfg, defaultTestRollupConfig)
+
+			rng := rand.New(rand.NewSource(99))
+			block := derivetest.RandomL2BlockWithChainId(rng, 2, defaultTestRollupConfig.L2ChainID)
+			m.blocks.Enqueue(mustSizedBlockFromGeth(block))
+
+			l1Head := testL1Head(1)
+			if isAmsterdam {
+				l1Head.BlockAccessListHash = &common.Hash{}
+			}
+			// The first call only opens a channel; the forced publish then assesses the DA type.
+			_, err := m.TxData(l1Head, false, pubInfo{})
+			require.ErrorIs(t, err, io.EOF)
+			_, err = m.TxData(l1Head, false, pubInfo{forcePublish: true})
+			require.NoError(t, err)
+			require.Equal(t, isAmsterdam, cfg.amsterdamArgs[len(cfg.amsterdamArgs)-1])
+		})
+	}
 }
 
 // TestChannelManager_TxData seeds the channel manager with blocks and triggers the
@@ -404,10 +440,10 @@ func TestChannelManager_TxData(t *testing.T) {
 			// Seed channel manager with a block
 			rng := rand.New(rand.NewSource(99))
 			blockA := derivetest.RandomL2BlockWithChainId(rng, 200, defaultTestRollupConfig.L2ChainID)
-			m.blocks = queue.Queue[SizedBlock]{SizedBlock{Block: blockA}}
+			m.blocks = queue.Queue[SizedBlock]{mustSizedBlockFromGeth(blockA)}
 
 			// Call TxData a first time to trigger blocks->channels pipeline
-			_, err := m.TxData(eth.BlockID{}, false, pubInfo{})
+			_, err := m.TxData(testL1Head(0), false, pubInfo{})
 			require.ErrorIs(t, err, io.EOF)
 
 			// The test requires us to have something in the channel queue
@@ -425,8 +461,8 @@ func TestChannelManager_TxData(t *testing.T) {
 			// we get some data to submit
 			var data txData
 			for {
-				m.blocks.Enqueue(SizedBlock{Block: blockA})
-				data, err = m.TxData(eth.BlockID{}, false, pubInfo{})
+				m.blocks.Enqueue(mustSizedBlockFromGeth(blockA))
+				data, err = m.TxData(testL1Head(0), false, pubInfo{})
 				if err == nil && data.Len() > 0 {
 					break
 				}
@@ -455,8 +491,8 @@ func TestChannelManager_handleChannelInvalidated(t *testing.T) {
 
 	// Seed channel manager with blocks
 	rng := rand.New(rand.NewSource(99))
-	blockA := ToSizedBlock(derivetest.RandomL2BlockWithChainId(rng, 10, defaultTestRollupConfig.L2ChainID))
-	blockB := ToSizedBlock(derivetest.RandomL2BlockWithChainId(rng, 10, defaultTestRollupConfig.L2ChainID))
+	blockA := mustSizedBlockFromGeth(derivetest.RandomL2BlockWithChainId(rng, 10, defaultTestRollupConfig.L2ChainID))
+	blockB := mustSizedBlockFromGeth(derivetest.RandomL2BlockWithChainId(rng, 10, defaultTestRollupConfig.L2ChainID))
 
 	// This is the snapshot of channel manager state we want to reinstate
 	// when we requeue
@@ -532,17 +568,20 @@ func TestChannelManager_handleChannelInvalidated(t *testing.T) {
 func TestChannelManager_PruneBlocks(t *testing.T) {
 	cfg := channelManagerTestConfig(100, derive.SingularBatchType)
 	cfg.InitNoneCompressor()
-	a := SizedBlock{Block: types.NewBlock(&types.Header{
-		Number: big.NewInt(0),
-	}, nil, nil, nil, types.DefaultBlockConfig)}
-	b := SizedBlock{Block: types.NewBlock(&types.Header{
+	a := mustSizedBlockFromGeth(types.NewBlock(&types.Header{
+		Number:  big.NewInt(0),
+		BaseFee: big.NewInt(7),
+	}, nil, nil, nil, types.DefaultBlockConfig))
+	b := mustSizedBlockFromGeth(types.NewBlock(&types.Header{
 		Number:     big.NewInt(1),
 		ParentHash: a.Hash(),
-	}, nil, nil, nil, types.DefaultBlockConfig)}
-	c := SizedBlock{Block: types.NewBlock(&types.Header{
+		BaseFee:    big.NewInt(7),
+	}, nil, nil, nil, types.DefaultBlockConfig))
+	c := mustSizedBlockFromGeth(types.NewBlock(&types.Header{
 		Number:     big.NewInt(2),
 		ParentHash: b.Hash(),
-	}, nil, nil, nil, types.DefaultBlockConfig)}
+		BaseFee:    big.NewInt(7),
+	}, nil, nil, nil, types.DefaultBlockConfig))
 
 	type testCase struct {
 		name                          string
@@ -751,10 +790,10 @@ func TestChannelManager_TxData_ForcePublish(t *testing.T) {
 	// Seed channel manager with a block
 	rng := rand.New(rand.NewSource(99))
 	blockA := derivetest.RandomL2BlockWithChainId(rng, 200, defaultTestRollupConfig.L2ChainID)
-	m.blocks = queue.Queue[SizedBlock]{SizedBlock{Block: blockA}}
+	m.blocks = queue.Queue[SizedBlock]{mustSizedBlockFromGeth(blockA)}
 
 	// Call TxData a first time to trigger blocks->channels pipeline
-	txData, err := m.TxData(eth.BlockID{}, false, pubInfo{})
+	txData, err := m.TxData(testL1Head(0), false, pubInfo{})
 	require.ErrorIs(t, err, io.EOF)
 	require.Zero(t, txData.Len(), 0)
 
@@ -764,7 +803,7 @@ func TestChannelManager_TxData_ForcePublish(t *testing.T) {
 	require.False(t, m.channelQueue[0].IsFull())
 
 	// Call TxData with force publish enabled
-	txData, err = m.TxData(eth.BlockID{}, false, pubInfo{forcePublish: true})
+	txData, err = m.TxData(testL1Head(0), false, pubInfo{forcePublish: true})
 
 	// Despite no additional blocks being added, we should have tx data:
 	require.NoError(t, err)
@@ -858,7 +897,7 @@ func TestChannelManagerUnsafeBytes(t *testing.T) {
 		manager := NewChannelManager(log.New(), metrics.NoopMetrics, cfg, defaultTestRollupConfig)
 
 		for _, block := range tc.blocks {
-			require.NoError(t, manager.AddL2Block(block))
+			require.NoError(t, manager.AddL2Block(mustPayloadFromGeth(block)))
 		}
 
 		assert.Equal(t, tc.afterAddingToUnsafeBlockQueue, manager.UnsafeDABytes())
@@ -868,10 +907,7 @@ func TestChannelManagerUnsafeBytes(t *testing.T) {
 
 		for err := error(nil); err != io.EOF; {
 			require.NoError(t, err)
-			_, err = manager.TxData(eth.BlockID{
-				Hash:   common.Hash{},
-				Number: 0,
-			}, false, pubInfo{})
+			_, err = manager.TxData(testL1Head(0), false, pubInfo{})
 		}
 
 		assert.Equal(t, tc.afterAddingToChannel, manager.UnsafeDABytes())
@@ -1062,7 +1098,7 @@ func TestChannelManager_SingleBlockBiggerThanMaxFrameSize(t *testing.T) {
 			cfg := channelManagerTestConfig(derive.FrameV0OverHeadSize, derive.SingularBatchType)
 			cfg.InitShadowCompressor(ca)
 			m := NewChannelManager(log, metrics.NoopMetrics, cfg, defaultTestRollupConfig)
-			require.NoError(m.AddL2Block(a))
+			require.NoError(m.AddL2Block(mustPayloadFromGeth(a)))
 
 			// Make sure there is a channel
 			require.NoError(m.ensureChannelWithSpace(l1BlockID))

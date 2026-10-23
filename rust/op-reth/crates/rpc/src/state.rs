@@ -4,9 +4,10 @@ use alloy_eips::BlockId;
 use derive_more::Constructor;
 use jsonrpsee_types::error::ErrorObject;
 use reth_optimism_trie::{
-    OpProofsStorage, OpProofsStore, api::OpProofsProviderRO, provider::OpProofsStateProviderRef,
+    OpProofsStorage, OpProofsStorageError, OpProofsStore, api::OpProofsProviderRO,
+    provider::OpProofsStateProviderRef,
 };
-use reth_provider::{BlockIdReader, ProviderError, ProviderResult, StateProvider};
+use reth_provider::{BlockHashReader, BlockIdReader, ProviderError, ProviderResult, StateProvider};
 use reth_rpc_api::eth::helpers::FullEthApi;
 use reth_rpc_eth_types::EthApiError;
 
@@ -37,20 +38,31 @@ where
             .ok_or(EthApiError::HeaderNotFound(block_id))
             .map_err(ProviderError::other)?;
 
+        // The proofs storage is canonical-only and is overlaid by block number, so a hash that
+        // names a non-canonical block would be served canonical state for its height.
+        if let BlockId::Hash(hash) = block_id &&
+            self.eth_api.provider().block_hash(block_number)? != Some(hash.block_hash)
+        {
+            return Err(ProviderError::other(EthApiError::HeaderNotFound(block_id)));
+        }
+
         let historical_provider =
             self.eth_api.state_at_block_id(block_id).await.map_err(ProviderError::other)?;
 
         let provider_ro = self.preimage_store.provider_ro().map_err(ProviderError::from)?;
 
-        let (Some((latest_block_number, _)), Some((earliest_block_number, _))) = (
-            provider_ro.get_latest_block_number().map_err(ProviderError::from)?,
-            provider_ro.get_earliest_block_number().map_err(ProviderError::from)?,
-        ) else {
-            // if no earliest block, db is empty, return error
-            return Err(ProviderError::StateForNumberNotFound(block_number));
+        // An empty proof window is semantically equivalent to an out-of-window lookup for
+        // the proofs RPC: there's no proof for that block. Any other storage error is real
+        // and propagates up.
+        let window = match provider_ro.get_proof_window() {
+            Ok(w) => w,
+            Err(OpProofsStorageError::NoBlocksFound) => {
+                return Err(ProviderError::StateForNumberNotFound(block_number));
+            }
+            Err(err) => return Err(ProviderError::from(err)),
         };
 
-        if block_number < earliest_block_number || block_number > latest_block_number {
+        if block_number < window.earliest.number || block_number > window.latest.number {
             return Err(ProviderError::StateForNumberNotFound(block_number));
         }
 

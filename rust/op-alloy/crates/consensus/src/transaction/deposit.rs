@@ -36,12 +36,7 @@ pub struct TxDeposit {
     /// Field indicating if this transaction is exempt from the L2 gas limit.
     #[cfg_attr(
         feature = "serde",
-        serde(
-            default,
-            with = "alloy_serde::quantity",
-            rename = "isSystemTx",
-            skip_serializing_if = "core::ops::Not::not"
-        )
+        serde(default, rename = "isSystemTx", skip_serializing_if = "core::ops::Not::not")
     )]
     pub is_system_transaction: bool,
     /// Input has two uses depending if transaction is Create or Call (if `to` field is None or
@@ -300,9 +295,10 @@ impl Decodable2718 for TxDeposit {
         Ok(tx)
     }
 
-    fn fallback_decode(data: &mut &[u8]) -> Eip2718Result<Self> {
-        let tx = Self::decode(data)?;
-        Ok(tx)
+    fn fallback_decode(_data: &mut &[u8]) -> Eip2718Result<Self> {
+        // Deposits have no untyped form: reaching untyped dispatch means the 0x7E tag was absent,
+        // so reject rather than resurrect the type from the body.
+        Err(Eip2718Error::UnexpectedType(OpTxType::Deposit as u8))
     }
 }
 

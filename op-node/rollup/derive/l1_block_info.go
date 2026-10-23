@@ -9,11 +9,11 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/solabi"
@@ -481,7 +481,7 @@ func L1BlockInfoFromBytes(rollupCfg *rollup.Config, l2BlockTime uint64, data []b
 
 // L1InfoDeposit creates a L1 Info deposit transaction based on the L1 block,
 // and the L2 block-height difference with the start of the epoch.
-func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, sysCfg eth.SystemConfig, seqNumber uint64, block eth.BlockInfo, l2Timestamp uint64) (*types.DepositTx, error) {
+func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, sysCfg eth.SystemConfig, seqNumber uint64, block eth.BlockInfo, l2Timestamp uint64) (*optypes.DepositTx, error) {
 	// Handle nil BaseFee for pre-EIP-1559 chains (like RSK)
 	baseFee := block.BaseFee()
 	if baseFee == nil {
@@ -573,7 +573,7 @@ func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, 
 	}
 	// Set a very large gas limit with `IsSystemTransaction` to ensure
 	// that the L1 Attributes Transaction does not run out of gas.
-	out := &types.DepositTx{
+	out := &optypes.DepositTx{
 		SourceHash:          source.SourceHash(),
 		From:                L1InfoDepositerAddress,
 		To:                  &L1BlockAddress,
@@ -597,8 +597,7 @@ func L1InfoDepositBytes(rollupCfg *rollup.Config, l1ChainConfig *params.ChainCon
 	if err != nil {
 		return nil, fmt.Errorf("failed to create L1 info tx: %w", err)
 	}
-	l1Tx := types.NewTx(dep)
-	opaqueL1Tx, err := l1Tx.MarshalBinary()
+	opaqueL1Tx, err := dep.MarshalBinary()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode L1 info tx: %w", err)
 	}

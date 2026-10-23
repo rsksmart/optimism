@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -18,7 +19,7 @@ const (
 	VMTypeAlphabet   = "ALPHABET"
 	VMTypeCannon     = "CANNON"      // Corresponds to the currently released Cannon StateVersion. See: https://github.com/ethereum-optimism/optimism/blob/4c05241bc534ae5837007c32995fc62f3dd059b6/cannon/mipsevm/versions/version.go
 	VMTypeCannonNext = "CANNON-NEXT" // Corresponds to the next in-development Cannon StateVersion. See: https://github.com/ethereum-optimism/optimism/blob/4c05241bc534ae5837007c32995fc62f3dd059b6/cannon/mipsevm/versions/version.go
-	VMTypeZK         = "ZK"          // ZK dispute game — uses a ZK verifier instead of a MIPS VM.
+	VMTypeZK         = "ZK"          // ZK dispute game — uses a ZK verifier instead of a MIPS VM, with super-root semantics.
 )
 
 func (v VMType) MipsVersion() uint64 {
@@ -32,6 +33,9 @@ func (v VMType) MipsVersion() uint64 {
 		return 0
 	}
 }
+
+// FaultGameAbsolutePrestateOverrideKey names the absolute prestate override.
+const FaultGameAbsolutePrestateOverrideKey = "faultGameAbsolutePrestate"
 
 type ChainProofParams struct {
 	DisputeGameType                         uint32      `json:"respectedGameType" toml:"respectedGameType"`
@@ -53,11 +57,10 @@ type AdditionalDisputeGame struct {
 
 // ZKDisputeGameParams holds the configuration for a ZK dispute game in the upgrade pipeline.
 type ZKDisputeGameParams struct {
-	Verifier             common.Address `json:"verifier" toml:"verifier"`
-	AbsolutePrestate     common.Hash    `json:"absolutePrestate" toml:"absolutePrestate"`
-	MaxChallengeDuration uint64         `json:"maxChallengeDuration" toml:"maxChallengeDuration"`
-	MaxProveDuration     uint64         `json:"maxProveDuration" toml:"maxProveDuration"`
-	ChallengerBond       *hexutil.Big   `json:"challengerBond" toml:"challengerBond"`
+	AbsolutePrestate     common.Hash  `json:"absolutePrestate" toml:"absolutePrestate"`
+	MaxChallengeDuration uint64       `json:"maxChallengeDuration" toml:"maxChallengeDuration"`
+	MaxProveDuration     uint64       `json:"maxProveDuration" toml:"maxProveDuration"`
+	ChallengerBond       *hexutil.Big `json:"challengerBond" toml:"challengerBond"`
 }
 
 type L2DevGenesisParams struct {
@@ -114,6 +117,7 @@ var ErrNonStandardValue = fmt.Errorf("chain contains non-standard config value")
 var ErrEip1559ZeroValue = fmt.Errorf("eip1559 param is set to zero value")
 var ErrIncompatibleValue = fmt.Errorf("chain contains incompatible config value")
 var ErrZKDisputeGameMissingParams = fmt.Errorf("ZK dispute game is missing required params")
+var ErrZKDisputeGameParamOutOfRange = fmt.Errorf("ZK dispute game param is out of range")
 
 func (c *ChainIntent) Check() error {
 	if c.ID == emptyHash {
@@ -171,17 +175,22 @@ func (c *ChainIntent) Check() error {
 			if game.ZKDisputeGame == nil {
 				return fmt.Errorf("%w: zkDisputeGame config must be set when VMType is ZK, chainId=%s", ErrZKDisputeGameMissingParams, c.ID)
 			}
-			if game.ZKDisputeGame.Verifier == (common.Address{}) {
-				return fmt.Errorf("%w: Verifier must not be zero address, chainId=%s", ErrZKDisputeGameMissingParams, c.ID)
-			}
 			if game.ZKDisputeGame.AbsolutePrestate == (common.Hash{}) {
 				return fmt.Errorf("%w: AbsolutePrestate must not be zero, chainId=%s", ErrZKDisputeGameMissingParams, c.ID)
 			}
 			if game.ZKDisputeGame.MaxChallengeDuration == 0 {
 				return fmt.Errorf("%w: MaxChallengeDuration must be > 0, chainId=%s", ErrZKDisputeGameMissingParams, c.ID)
 			}
+			// Capped at uint32 max so block.timestamp + duration cannot overflow the game's uint64
+			// deadline cast, which would place the deadline in the past.
+			if game.ZKDisputeGame.MaxChallengeDuration > math.MaxUint32 {
+				return fmt.Errorf("%w: MaxChallengeDuration must be <= %d, chainId=%s", ErrZKDisputeGameParamOutOfRange, uint64(math.MaxUint32), c.ID)
+			}
 			if game.ZKDisputeGame.MaxProveDuration == 0 {
 				return fmt.Errorf("%w: MaxProveDuration must be > 0, chainId=%s", ErrZKDisputeGameMissingParams, c.ID)
+			}
+			if game.ZKDisputeGame.MaxProveDuration > math.MaxUint32 {
+				return fmt.Errorf("%w: MaxProveDuration must be <= %d, chainId=%s", ErrZKDisputeGameParamOutOfRange, uint64(math.MaxUint32), c.ID)
 			}
 			if game.ZKDisputeGame.ChallengerBond == nil || game.ZKDisputeGame.ChallengerBond.ToInt().Sign() <= 0 {
 				return fmt.Errorf("%w: ChallengerBond must be set to a positive value, chainId=%s", ErrZKDisputeGameMissingParams, c.ID)

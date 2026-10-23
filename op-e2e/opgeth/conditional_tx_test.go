@@ -50,7 +50,7 @@ func mkTransferTx(t *testing.T, cfg *e2esys.SystemConfig, clnt *ethclient.Client
 
 func TestSendRawTransactionConditionalDisabled(t *testing.T) {
 	op_e2e.InitParallel(t)
-	cfg := e2esys.DefaultSystemConfig(t)
+	cfg := opGethSystemConfig(t)
 	cfg.GethOptions[e2esys.RoleSeq] = []geth.GethOption{func(ethCfg *ethconfig.Config, nodeCfg *node.Config) error {
 		ethCfg.RollupSequencerTxConditionalEnabled = false
 		return nil
@@ -63,12 +63,12 @@ func TestSendRawTransactionConditionalDisabled(t *testing.T) {
 	require.Error(t, err)
 
 	// method not found json error
-	require.Equal(t, -32601, err.(*rpc.JsonError).Code)
+	require.Equal(t, -32601, err.(rpc.Error).ErrorCode())
 }
 
 func TestSendRawTransactionConditionalEnabled(t *testing.T) {
 	op_e2e.InitParallel(t)
-	cfg := e2esys.DefaultSystemConfig(t)
+	cfg := opGethSystemConfig(t)
 	cfg.GethOptions[e2esys.RoleSeq] = []geth.GethOption{enableTxCondGethOption}
 
 	sys, err := cfg.Start(t)
@@ -85,7 +85,7 @@ func TestSendRawTransactionConditionalEnabled(t *testing.T) {
 	// rejected conditional
 	err = l2Client.Client().Call(nil, sendTxCondMethodName, hexutil.Encode(txBytes), &types.TransactionConditional{TimestampMax: uint64Ptr(0)})
 	require.Error(t, err)
-	require.Equal(t, params.TransactionConditionalRejectedErrCode, err.(*rpc.JsonError).Code)
+	require.Equal(t, params.TransactionConditionalRejectedErrCode, err.(rpc.Error).ErrorCode())
 
 	// accepted conditional
 	var hash common.Hash
@@ -98,7 +98,7 @@ func TestSendRawTransactionConditionalEnabled(t *testing.T) {
 
 func TestSendRawTransactionConditionalTxForwarding(t *testing.T) {
 	op_e2e.InitParallel(t)
-	cfg := e2esys.DefaultSystemConfig(t)
+	cfg := opGethSystemConfig(t)
 	cfg.GethOptions[e2esys.RoleSeq] = []geth.GethOption{enableTxCondGethOption}
 
 	// Tx will be submitted to the verifier sentry node, so we need to enable this endpoint

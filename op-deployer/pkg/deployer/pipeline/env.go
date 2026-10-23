@@ -11,17 +11,16 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/forge"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
-
-	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/log"
 )
 
 type Env struct {
@@ -34,9 +33,16 @@ type Env struct {
 	Scripts      *opcm.Scripts
 	ForgeClient  *forge.Client
 	UseForge     bool
-	L1RPCUrl     string
-	PrivateKey   string
-	Context      context.Context
+	// IsGenesis identifies deployments that build genesis allocations instead of targeting a running chain.
+	IsGenesis bool
+	// DeployMockSP1Verifier explicitly opts development environments into an accept-all raw verifier.
+	DeployMockSP1Verifier bool
+	// AllowUnoptimizedContracts permits contract artifacts that exceed the EIP-170 code-size limit.
+	// It is only enabled for genesis-mode deployments, which execute scripts against an in-memory host.
+	AllowUnoptimizedContracts bool
+	L1RPCUrl                  string
+	PrivateKey                string
+	Context                   context.Context
 }
 
 type StateWriter interface {
@@ -84,12 +90,7 @@ func WriteState(workdir string, st *state.State) error {
 	return st.WriteToFile(statePath)
 }
 
-type ArtifactsBundle struct {
-	L1 foundry.StatDirFs
-	L2 foundry.StatDirFs
-}
-
-type Stage func(ctx context.Context, env *Env, bundle ArtifactsBundle, intent *state.Intent, st *state.State) error
+type Stage func(ctx context.Context, env *Env, bundle artifacts.Bundle, intent *state.Intent, st *state.State) error
 
 func RenderGenesisAndRollup(globalState *state.State, chainID common.Hash, useGlobalIntent *state.Intent) (*core.Genesis, *rollup.Config, error) {
 	if useGlobalIntent == nil && globalState.AppliedIntent == nil {
@@ -111,6 +112,10 @@ func RenderGenesisAndRollup(globalState *state.State, chainID common.Hash, useGl
 		return nil, nil, fmt.Errorf("failed to get chain ID %s: %w", chainID.String(), err)
 	}
 
+	if chainState.StartBlock == nil {
+		return nil, nil, fmt.Errorf("chain %s has no pinned start block - run op-deployer prepare first", chainID.Hex())
+	}
+
 	l2Allocs := chainState.Allocs.Data
 	config, err := state.CombineDeployConfig(
 		globalIntent,
@@ -128,6 +133,14 @@ func RenderGenesisAndRollup(globalState *state.State, chainID common.Hash, useGl
 	}
 	l2GenesisBlock := l2GenesisBuilt.ToBlock()
 
+	// Cross-check against the hash prepare committed.
+	if chainState.GenesisBlockHash != nil && l2GenesisBlock.Hash() != *chainState.GenesisBlockHash {
+		return nil, nil, fmt.Errorf(
+			"chain %s: rendered genesis block hash %s does not match the committed GenesisBlockHash %s from prepare; rerun op-deployer prepare",
+			chainID.Hex(), l2GenesisBlock.Hash(), *chainState.GenesisBlockHash,
+		)
+	}
+
 	rollupConfig, err := config.RollupConfig(
 		chainState.StartBlock.ToBlockRef(),
 		l2GenesisBlock.Hash(),
@@ -142,4 +155,19 @@ func RenderGenesisAndRollup(globalState *state.State, chainID common.Hash, useGl
 	}
 
 	return l2GenesisBuilt, rollupConfig, nil
+}
+
+// ResolveRenderIntent returns the intent to use when rendering derived artifacts for a chain.
+// Applied state always uses the frozen AppliedIntent snapshot, so rendered
+// artifacts match what was actually broadcast on-chain. Prepared uses the snapshot
+// stored in PreparedDeployment.
+func ResolveRenderIntent(workdir string, globalState *state.State) (*state.Intent, error) {
+	if globalState.AppliedIntent != nil {
+		return globalState.AppliedIntent, nil
+	}
+	if globalState.PreparedDeployment == nil {
+		return nil, fmt.Errorf("chain state is neither prepared nor applied - run op-deployer prepare or apply")
+	}
+
+	return globalState.PreparedDeployment.Intent, nil
 }

@@ -5,43 +5,59 @@ import (
 	"fmt"
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	"github.com/ethereum-optimism/optimism/op-core/interop"
+	messages "github.com/ethereum-optimism/optimism/op-core/interop/messages"
 )
 
 // defaultMessageExpiryWindow is the default maximum age of an initiating message
 // that can be executed. 7 days = 7 * 24 * 60 * 60 = 604800 seconds.
 // The actual value used is read from the dependency set at construction time.
-const defaultMessageExpiryWindow = 604800
+const defaultMessageExpiryWindow uint64 = 604800
+
+// ErrInvalidMessage is the base for every error that proves an executing message invalid.
+var ErrInvalidMessage = errors.New("invalid executing message")
 
 var (
 	// ErrUnknownChain is returned when an executing message references
 	// a chain that is not registered with the interop activity.
-	ErrUnknownChain = errors.New("unknown chain")
+	ErrUnknownChain = fmt.Errorf("%w: unknown chain", ErrInvalidMessage)
+
+	// ErrChainNotInDependencySet is returned when either side of an executing
+	// message references a chain outside the dependency set.
+	ErrChainNotInDependencySet = fmt.Errorf("%w: chain not in dependency set", ErrInvalidMessage)
 
 	// ErrTimestampViolation is returned when an executing message references
 	// an initiating message with a timestamp > the executing message's timestamp.
-	ErrTimestampViolation = errors.New("initiating message timestamp must not be greater than executing message timestamp")
+	ErrTimestampViolation = fmt.Errorf("%w: initiating message timestamp must not be greater than executing message timestamp", ErrInvalidMessage)
 
 	// ErrMessageExpired is returned when an executing message references
 	// an initiating message that has expired (older than the message expiry window).
-	ErrMessageExpired = errors.New("initiating message has expired")
+	ErrMessageExpired = fmt.Errorf("%w: initiating message has expired", ErrInvalidMessage)
+
+	// ErrExecutedTooEarly is returned when an executing message is in the executing chain's
+	// pre-activation or activation block.
+	ErrExecutedTooEarly = fmt.Errorf("%w: interop is not active for at least one block on the executing chain", ErrInvalidMessage)
+
+	// ErrInitiatedTooEarly is returned when an executing message references an initiating
+	// message in the initiating chain's pre-activation or activation block.
+	ErrInitiatedTooEarly = fmt.Errorf("%w: interop is not active for at least one block on the initiating chain", ErrInvalidMessage)
 )
 
 type blockPerChain = map[eth.ChainID]eth.BlockID
 
-// l1Inclusion returns the earliest L1 block such that all L2 blocks at the supplied timestamp were derived
-// from a source at or before that L1 block.
-func (i *Interop) l1Inclusion(ts uint64, blocksAtTimestamp blockPerChain) (eth.BlockID, error) {
+// l1Inclusion returns the latest L1 block from the l1Heads snapshot. l1Heads must be the
+// per-chain snapshot captured atomically with blocksAtTimestamp in observeRound; re-reading
+// it here would race with L2 reorgs between observation and verification.
+func (i *Interop) l1Inclusion(blocksAtTimestamp blockPerChain, l1Heads blockPerChain) (eth.BlockID, error) {
 	l1Inclusion := eth.BlockID{}
 	for chainID := range blocksAtTimestamp {
-		chain, ok := i.chains[chainID]
-		if !ok {
+		if _, ok := i.chains[chainID]; !ok {
 			continue
 		}
-		_, l1Block, err := chain.OptimisticAt(i.ctx, ts)
-		if err != nil {
-			i.log.Error("failed to get L1 inclusion for L2 block", "chainID", chainID, "timestamp", ts, "err", err)
-			return eth.BlockID{}, fmt.Errorf("chain %s: failed to get L1 inclusion: %w", chainID, err)
+		l1Block, ok := l1Heads[chainID]
+		if !ok {
+			return eth.BlockID{}, fmt.Errorf("chain %s: missing L1 inclusion in observation snapshot", chainID)
 		}
 		if l1Block.Number >= l1Inclusion.Number {
 			l1Inclusion = l1Block
@@ -56,17 +72,18 @@ func (i *Interop) l1Inclusion(ts uint64, blocksAtTimestamp blockPerChain) (eth.B
 // For each chain:
 // 1. Open the block from the logsDB and verify it matches blocksAtTimestamp
 // 2. For each executing message in the block:
+//   - Verify both chain IDs belong to the dependency set
 //   - Verify the initiating message exists in the source chain's logsDB
 //   - Verify the initiating message timestamp <= executing message timestamp
 //   - Verify the initiating message hasn't expired (within message expiry window)
-func (i *Interop) verifyInteropMessages(ts uint64, blocksAtTimestamp blockPerChain, view *frontierVerificationView) (Result, error) {
+func (i *Interop) verifyInteropMessages(ts uint64, blocksAtTimestamp blockPerChain, l1Heads blockPerChain, view *frontierVerificationView) (Result, error) {
 	result := Result{
 		Timestamp:    ts,
 		L2Heads:      make(blockPerChain),
 		InvalidHeads: make(map[eth.ChainID]InvalidHead),
 	}
 
-	if l1Inclusion, err := i.l1Inclusion(ts, blocksAtTimestamp); err != nil {
+	if l1Inclusion, err := i.l1Inclusion(blocksAtTimestamp, l1Heads); err != nil {
 		return Result{}, err
 	} else {
 		result.L1Inclusion = l1Inclusion
@@ -75,7 +92,7 @@ func (i *Interop) verifyInteropMessages(ts uint64, blocksAtTimestamp blockPerCha
 	for chainID, expectedBlock := range blocksAtTimestamp {
 		var (
 			blockRef eth.BlockRef
-			execMsgs map[uint32]*types.ExecutingMessage
+			execMsgs map[uint32]*messages.ExecutingMessage
 			err      error
 		)
 		if frontierBlock, ok := view.block(chainID); ok {
@@ -89,35 +106,8 @@ func (i *Interop) verifyInteropMessages(ts uint64, blocksAtTimestamp blockPerCha
 				continue
 			}
 
-			// Get the block from the logsDB
 			blockRef, _, execMsgs, err = db.OpenBlock(expectedBlock.Number)
 			if err != nil {
-				// OpenBlock fails for the first block in the DB because it tries to find the parent.
-				// Handle this by checking if this is the first sealed block and using FirstSealedBlock instead.
-				if errors.Is(err, types.ErrSkipped) {
-					firstBlock, firstErr := db.FirstSealedBlock()
-					if firstErr != nil {
-						return Result{}, fmt.Errorf("chain %s: failed to open block %d and failed to get first block: %w", chainID, expectedBlock.Number, err)
-					}
-					if firstBlock.Number == expectedBlock.Number {
-						// This is the first block in the logsDB. Use FirstSealedBlock info.
-						// The first block has no executing messages (since we can't verify them without prior data).
-						if firstBlock.Hash != expectedBlock.Hash {
-							i.log.Warn("first block hash mismatch",
-								"chain", chainID,
-								"expected", expectedBlock.Hash,
-								"got", firstBlock.Hash,
-							)
-							invalid, err := i.newInvalidHead(chainID, expectedBlock)
-							if err != nil {
-								return Result{}, fmt.Errorf("chain %s: %w", chainID, err)
-							}
-							result.InvalidHeads[chainID] = invalid
-						}
-						result.L2Heads[chainID] = expectedBlock
-						continue
-					}
-				}
 				return Result{}, fmt.Errorf("chain %s: failed to open block %d: %w", chainID, expectedBlock.Number, err)
 			}
 		}
@@ -143,6 +133,12 @@ func (i *Interop) verifyInteropMessages(ts uint64, blocksAtTimestamp blockPerCha
 		for logIdx, execMsg := range execMsgs {
 			err := i.verifyExecutingMessage(chainID, blockRef.Time, logIdx, execMsg, view)
 			if err != nil {
+				if !errors.Is(err, ErrInvalidMessage) {
+					// A local failure, not an indication the message is invalid.
+					// Abort the round and retry it later.
+					return Result{}, fmt.Errorf("chain %s: failed to verify executing message %d in block %d: %w",
+						chainID, logIdx, expectedBlock.Number, err)
+				}
 				i.log.Warn("invalid executing message",
 					"chain", chainID,
 					"block", expectedBlock.Number,
@@ -169,14 +165,47 @@ func (i *Interop) verifyInteropMessages(ts uint64, blocksAtTimestamp blockPerCha
 }
 
 // verifyExecutingMessage verifies a single executing message by checking:
-//  1. The initiating message exists in the source chain's database
-//  2. The initiating message's timestamp is not greater than the executing block's timestamp
-//  3. The initiating message hasn't expired (timestamp + messageExpiryWindow >= executing timestamp)
-func (i *Interop) verifyExecutingMessage(executingChain eth.ChainID, executingTimestamp uint64, logIdx uint32, execMsg *types.ExecutingMessage, view *frontierVerificationView) error {
+//  1. Both chain IDs belong to the dependency set
+//  2. The initiating message exists in the source chain's database
+//  3. The initiating message's timestamp is not greater than the executing block's timestamp
+//  4. The initiating message hasn't expired (executing timestamp - timestamp <= messageExpiryWindow)
+//  5. Neither the executing block nor the initiating block falls in its chain's interop
+//     activation block (interop must be active for at least one full block on both sides)
+func (i *Interop) verifyExecutingMessage(executingChain eth.ChainID, executingTimestamp uint64, logIdx uint32, execMsg *messages.ExecutingMessage, view *frontierVerificationView) error {
+	if i.dependencySet == nil {
+		return fmt.Errorf("dependency set unavailable: %w", ErrChainNotInDependencySet)
+	}
+	if !i.dependencySet.HasChain(executingChain) {
+		return fmt.Errorf("executing chain %s: %w", executingChain, ErrChainNotInDependencySet)
+	}
+	if !i.dependencySet.HasChain(execMsg.ChainID) {
+		return fmt.Errorf("initiating chain %s: %w", execMsg.ChainID, ErrChainNotInDependencySet)
+	}
+
 	// Get the source chain's logsDB
 	sourceDB, ok := i.logsDBs[execMsg.ChainID]
 	if !ok {
 		return fmt.Errorf("source chain %s not found: %w", execMsg.ChainID, ErrUnknownChain)
+	}
+
+	// Activation invariant: interop must be active for at least one full block on
+	// both the executing chain and the initiating chain. Matches kona.
+	execChain, ok := i.chains[executingChain]
+	if !ok {
+		return fmt.Errorf("executing chain %s not registered: %w", executingChain, ErrUnknownChain)
+	}
+	if executingTimestamp < i.activationTimestamp+execChain.BlockTime() {
+		return fmt.Errorf("executing chain %s timestamp %d < activation %d + blockTime: %w",
+			executingChain, executingTimestamp, i.activationTimestamp, ErrExecutedTooEarly)
+	}
+
+	initChain, ok := i.chains[execMsg.ChainID]
+	if !ok {
+		return fmt.Errorf("initiating chain %s not registered: %w", execMsg.ChainID, ErrUnknownChain)
+	}
+	if execMsg.Timestamp < i.activationTimestamp+initChain.BlockTime() {
+		return fmt.Errorf("initiating chain %s timestamp %d < activation %d + blockTime: %w",
+			execMsg.ChainID, execMsg.Timestamp, i.activationTimestamp, ErrInitiatedTooEarly)
 	}
 
 	// Verify timestamp ordering: initiating message timestamp must be <= executing block timestamp.
@@ -185,14 +214,14 @@ func (i *Interop) verifyExecutingMessage(executingChain eth.ChainID, executingTi
 			execMsg.Timestamp, executingTimestamp, ErrTimestampViolation)
 	}
 
-	// Verify the message hasn't expired: initiating timestamp + messageExpiryWindow must be >= executing timestamp
-	if execMsg.Timestamp+i.messageExpiryWindow < executingTimestamp {
-		return fmt.Errorf("initiating timestamp %d + expiry %d < executing timestamp %d: %w",
-			execMsg.Timestamp, i.messageExpiryWindow, executingTimestamp, ErrMessageExpired)
+	// Verify the message hasn't expired: the message age must not exceed messageExpiryWindow.
+	if executingTimestamp-execMsg.Timestamp > i.messageExpiryWindow {
+		return fmt.Errorf("executing timestamp %d - initiating timestamp %d > expiry %d: %w",
+			executingTimestamp, execMsg.Timestamp, i.messageExpiryWindow, ErrMessageExpired)
 	}
 
 	// Build the query for the initiating message
-	query := types.ContainsQuery{
+	query := messages.ContainsQuery{
 		BlockNum:  execMsg.BlockNum,
 		LogIdx:    execMsg.LogIdx,
 		Timestamp: execMsg.Timestamp,
@@ -207,7 +236,13 @@ func (i *Interop) verifyExecutingMessage(executingChain eth.ChainID, executingTi
 		}
 	}
 
-	// Check if the initiating message exists in the source chain's logsDB
-	_, err := sourceDB.Contains(query)
-	return err
+	// Check if the initiating message exists in the source chain's logsDB.
+	if _, err := sourceDB.Contains(query); err != nil {
+		if !errors.Is(err, interop.ErrDatabaseFailure) {
+			err = fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+		}
+		return fmt.Errorf("initiating message chain %s block %d log %d: %w",
+			execMsg.ChainID, execMsg.BlockNum, execMsg.LogIdx, err)
+	}
+	return nil
 }

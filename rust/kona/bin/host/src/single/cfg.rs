@@ -15,6 +15,7 @@ use kona_cli::cli_styles;
 use kona_genesis::{L1ChainConfig, RollupConfig};
 use kona_preimage::{
     BidirectionalChannel, Channel, HintReader, HintWriter, OracleReader, OracleServer,
+    VerifyingPreimageFetcher,
 };
 use kona_proof::HintType;
 use kona_providers_alloy::{OnlineBeaconClient, OnlineBlobProvider};
@@ -113,10 +114,6 @@ pub struct SingleChainHost {
     /// look up the config in the known l1 configs.
     #[arg(long, alias = "l1-cfg", env)]
     pub l1_config_path: Option<PathBuf>,
-    /// Optionally enables the use of `debug_executePayload` to collect the execution witness from
-    /// the execution layer.
-    #[arg(long, env)]
-    pub enable_experimental_witness_endpoint: bool,
 }
 
 /// An error that can occur when handling single chain hosts
@@ -134,6 +131,9 @@ pub enum SingleChainHostError {
     /// Task failed to execute to completion.
     #[error("Join error: {0}")]
     ExecutionError(#[from] tokio::task::JoinError),
+    /// A blob provider error.
+    #[error("Blob provider error: {0}")]
+    BlobProviderError(#[from] kona_derive::BlobProviderError),
     /// No rollup config found.
     #[error("No rollup config found")]
     NoRollupConfig,
@@ -175,7 +175,7 @@ impl SingleChainHost {
                 PreimageServer::new(
                     OracleServer::new(preimage),
                     HintReader::new(hint),
-                    Arc::new(OfflineHostBackend::new(kv_store)),
+                    Arc::new(VerifyingPreimageFetcher::new(OfflineHostBackend::new(kv_store))),
                 )
                 .start()
                 .await
@@ -189,13 +189,13 @@ impl SingleChainHost {
                 providers,
                 SingleChainHintHandler,
             )
-            .with_proactive_hint(HintType::L2PayloadWitness);
+            .with_high_level_hint(HintType::L2PayloadWitness);
 
             task::spawn(async {
                 PreimageServer::new(
                     OracleServer::new(preimage),
                     HintReader::new(hint),
-                    Arc::new(backend),
+                    Arc::new(VerifyingPreimageFetcher::new(backend)),
                 )
                 .start()
                 .await
@@ -277,7 +277,7 @@ impl SingleChainHost {
                 .clone()
                 .ok_or(SingleChainHostError::Other("Beacon API URL must be set"))?,
         ))
-        .await;
+        .await?;
         let l2_provider = rpc_provider::<Optimism>(
             self.l2_node_address
                 .as_ref()
@@ -345,18 +345,6 @@ mod test {
                     "--server",
                     "--l2-chain-id",
                     "0",
-                ]
-                .as_slice(),
-                true,
-            ),
-            (
-                [
-                    "--server",
-                    "--l2-chain-id",
-                    "0",
-                    "--data-dir",
-                    "dummy",
-                    "--enable-experimental-witness-endpoint",
                 ]
                 .as_slice(),
                 true,

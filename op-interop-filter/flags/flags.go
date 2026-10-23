@@ -9,12 +9,16 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
-	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log/logcli"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 )
 
-const EnvVarPrefix = "OP_INTEROP_FILTER"
+const (
+	EnvVarPrefix            = "OP_INTEROP_FILTER"
+	DefaultRPCConcurrency   = 100
+	DefaultFetchConcurrency = 64
+)
 
 func prefixEnvVars(name string) []string {
 	return opservice.PrefixEnvVar(EnvVarPrefix, name)
@@ -44,15 +48,15 @@ var (
 	}
 	BackfillDurationFlag = &cli.DurationFlag{
 		Name:    "backfill-duration",
-		Usage:   "Duration to backfill on startup (e.g., 24h, 30m, 1h30m)",
+		Usage:   "Duration to backfill on startup (e.g., 168h, 30m, 1h30m)",
 		EnvVars: prefixEnvVars("BACKFILL_DURATION"),
-		Value:   24 * time.Hour,
+		Value:   168 * time.Hour,
 	}
 	MessageExpiryWindowFlag = &cli.DurationFlag{
 		Name:    "message-expiry-window",
 		Usage:   "Message expiry window duration (e.g., 168h for 7 days). Messages older than this are considered expired.",
 		EnvVars: prefixEnvVars("MESSAGE_EXPIRY_WINDOW"),
-		Value:   168 * time.Hour, // 7 days default, matching op-supervisor
+		Value:   168 * time.Hour, // 7 days default for interop message expiry
 	}
 	JWTSecretFlag = &cli.StringFlag{
 		Name: "admin.jwt-secret",
@@ -100,6 +104,34 @@ var (
 		EnvVars: prefixEnvVars("VALIDATION_INTERVAL"),
 		Value:   500 * time.Millisecond,
 	}
+	ReorgRecoveryEnabledFlag = &cli.BoolFlag{
+		Name:    "reorg-recovery-enabled",
+		Usage:   "Automatically resolve reorg-triggered failsafe by rewinding logs DBs to finalized.",
+		EnvVars: prefixEnvVars("REORG_RECOVERY_ENABLED"),
+	}
+	FailsafeLogIntervalFlag = &cli.DurationFlag{
+		Name:    "failsafe-log-interval",
+		Usage:   "Interval at which the active failsafe reason is re-logged while failsafe is enabled (e.g., 1m, 30s)",
+		EnvVars: prefixEnvVars("FAILSAFE_LOG_INTERVAL"),
+		Value:   time.Minute,
+	}
+	RPCConcurrencyFlag = &cli.IntFlag{
+		Name:    "rpc-concurrency",
+		Usage:   "Maximum number of concurrent RPC requests per chain",
+		EnvVars: prefixEnvVars("RPC_CONCURRENCY"),
+		Value:   DefaultRPCConcurrency,
+	}
+	FetchConcurrencyFlag = &cli.IntFlag{
+		Name:    "fetch-concurrency",
+		Usage:   "Number of blocks to fetch concurrently during ingestion. Must be <= rpc-concurrency.",
+		EnvVars: prefixEnvVars("FETCH_CONCURRENCY"),
+		Value:   DefaultFetchConcurrency,
+	}
+	SupportLegacyCheckAccessListFormatFlag = &cli.BoolFlag{
+		Name:    "support-legacy-check-access-list-format",
+		Usage:   "Support legacy interop_checkAccessList requests that omit executing chainID. DANGEROUS: intended only for compatibility with legacy clients; access-list source-chain validation still runs.",
+		EnvVars: prefixEnvVars("SUPPORT_LEGACY_CHECK_ACCESS_LIST_FORMAT"),
+	}
 	DangerouslyEnablePassthroughFlag = &cli.BoolFlag{
 		Name:    "dangerously-enable-passthrough",
 		Usage:   "Allow all transactions through without interop filtering. DANGEROUS: disables all executing message validation.",
@@ -124,11 +156,16 @@ var optionalFlags = []cli.Flag{
 	RPCPortFlag,
 	PollIntervalFlag,
 	ValidationIntervalFlag,
+	ReorgRecoveryEnabledFlag,
+	FailsafeLogIntervalFlag,
+	RPCConcurrencyFlag,
+	FetchConcurrencyFlag,
+	SupportLegacyCheckAccessListFormatFlag,
 	DangerouslyEnablePassthroughFlag,
 }
 
 func init() {
-	optionalFlags = append(optionalFlags, oplog.CLIFlags(EnvVarPrefix)...)
+	optionalFlags = append(optionalFlags, logcli.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, opmetrics.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, oppprof.CLIFlags(EnvVarPrefix)...)
 

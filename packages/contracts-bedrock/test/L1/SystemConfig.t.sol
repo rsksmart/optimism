@@ -3,6 +3,7 @@ pragma solidity 0.8.15;
 
 // Testing
 import { CommonTest } from "test/setup/CommonTest.sol";
+import { stdStorage, StdStorage } from "forge-std/StdStorage.sol";
 
 // Scripts
 import { ForgeArtifacts, StorageSlot } from "scripts/libraries/ForgeArtifacts.sol";
@@ -25,7 +26,6 @@ abstract contract SystemConfig_TestInit is CommonTest {
 
     bytes32 public constant EXAMPLE_FEATURE = "EXAMPLE_FEATURE";
 
-    address batchInbox;
     address owner;
     bytes32 batcherHash;
     uint64 gasLimit;
@@ -37,7 +37,6 @@ abstract contract SystemConfig_TestInit is CommonTest {
 
     function setUp() public virtual override {
         super.setUp();
-        batchInbox = deploy.cfg().batchInboxAddress();
         owner = deploy.cfg().finalSystemOwner();
         basefeeScalar = deploy.cfg().basefeeScalar();
         blobbasefeeScalar = deploy.cfg().blobbasefeeScalar();
@@ -81,7 +80,6 @@ contract SystemConfig_Constructor_Test is SystemConfig_TestInit {
         assertEq(actual.systemTxMaxGas, 0);
         assertEq(actual.maximumBaseFee, 0);
         assertEq(impl.startBlock(), type(uint256).max);
-        assertEq(address(impl.batchInbox()), address(0));
         // Check addresses
         assertEq(address(impl.l1CrossDomainMessenger()), address(0));
         assertEq(address(impl.l1ERC721Bridge()), address(0));
@@ -128,7 +126,6 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
         // Depends on start block being set to 0 in `initialize`
         uint256 cfgStartBlock = deploy.cfg().systemConfigStartBlock();
         assertEq(systemConfig.startBlock(), (cfgStartBlock == 0 ? block.number : cfgStartBlock));
-        assertEq(address(systemConfig.batchInbox()), address(batchInbox));
 
         // Check address getters both for the single contract getter and the struct getter
         ISystemConfig.Addresses memory addrs = systemConfig.getAddresses();
@@ -143,6 +140,40 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
         assertEq(address(systemConfig.optimismMintableERC20Factory()), address(optimismMintableERC20Factory));
         assertEq(addrs.optimismMintableERC20Factory, address(optimismMintableERC20Factory));
         assertNotEq(systemConfig.l2ChainId(), 0);
+    }
+
+    /// @notice Tests that initialization clears legacy state.
+    function test_initialize_clearsLegacyState_succeeds() external {
+        bytes32 batchInboxSlot = bytes32(uint256(keccak256("systemconfig.batchinbox")) - 1);
+        StorageSlot memory overheadSlot = ForgeArtifacts.getSlot("SystemConfig", "overhead");
+
+        // Seed the values so a no-op `initialize` cannot pass this test.
+        vm.store(address(systemConfig), batchInboxSlot, bytes32(uint256(uint160(address(0xbadbad)))));
+        vm.store(address(systemConfig), bytes32(overheadSlot.slot), bytes32(uint256(2100)));
+        assertEq(vm.load(address(systemConfig), batchInboxSlot), bytes32(uint256(uint160(address(0xbadbad)))));
+        assertEq(systemConfig.overhead(), 2100);
+
+        vm.store(address(systemConfig), bytes32(0), bytes32(0));
+        ISystemConfig.Addresses memory addresses = systemConfig.getAddresses();
+        uint256 l2ChainId = systemConfig.l2ChainId();
+        ISuperchainConfig superchainConfig = systemConfig.superchainConfig();
+        address admin = address(uint160(uint256(vm.load(address(systemConfig), Constants.PROXY_OWNER_ADDRESS))));
+        vm.prank(admin);
+        systemConfig.initialize({
+            _owner: owner,
+            _basefeeScalar: basefeeScalar,
+            _blobbasefeeScalar: blobbasefeeScalar,
+            _batcherHash: batcherHash,
+            _gasLimit: gasLimit,
+            _unsafeBlockSigner: unsafeBlockSigner,
+            _config: Constants.DEFAULT_RESOURCE_CONFIG(),
+            _addresses: addresses,
+            _l2ChainId: l2ChainId,
+            _superchainConfig: superchainConfig
+        });
+
+        assertEq(vm.load(address(systemConfig), batchInboxSlot), bytes32(0));
+        assertEq(systemConfig.overhead(), 0);
     }
 
     /// @notice Tests that initialization reverts if the gas limit is too low.
@@ -164,7 +195,6 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
             _gasLimit: minimumGasLimit - 1,
             _unsafeBlockSigner: address(1),
             _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -222,7 +252,6 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
             _gasLimit: minimumGasLimit - 1,
             _unsafeBlockSigner: address(1),
             _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -258,7 +287,6 @@ contract SystemConfig_StartBlock_Test is SystemConfig_TestInit {
             _gasLimit: gasLimit,
             _unsafeBlockSigner: address(1),
             _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -274,8 +302,8 @@ contract SystemConfig_StartBlock_Test is SystemConfig_TestInit {
         assertEq(systemConfig.startBlock(), block.number);
     }
 
-    /// @notice Tests that startBlock is not updated when it's not zero.
-    function test_startBlock_update_fails() external {
+    /// @notice Tests that initialization preserves a non-zero start block.
+    function test_initialize_preservesStartBlock_succeeds() external {
         // Wipe out the initialized slot so the proxy can be initialized again
         vm.store(address(systemConfig), bytes32(0), bytes32(0));
         // Set slot startBlock to non-zero value 1
@@ -291,7 +319,6 @@ contract SystemConfig_StartBlock_Test is SystemConfig_TestInit {
             _gasLimit: gasLimit,
             _unsafeBlockSigner: address(1),
             _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -366,36 +393,6 @@ contract SystemConfig_SetBatcherHash_Test is SystemConfig_TestInit {
     }
 }
 
-/// @title SystemConfig_SetGasConfig_Test
-/// @notice Test contract for SystemConfig `setGasConfig` function.
-contract SystemConfig_SetGasConfig_Test is SystemConfig_TestInit {
-    /// @notice Tests that `setGasConfig` reverts if the caller is not the owner.
-    function test_setGasConfig_notOwner_reverts() external {
-        vm.expectRevert("Ownable: caller is not the owner");
-        systemConfig.setGasConfig(0, 0);
-    }
-
-    /// @notice Ensures that `setGasConfig` reverts if version byte is set.
-    function test_setGasConfig_badValues_reverts() external {
-        vm.prank(systemConfig.owner());
-        vm.expectRevert("SystemConfig: scalar exceeds max.");
-        systemConfig.setGasConfig({ _overhead: 0, _scalar: type(uint256).max });
-    }
-
-    /// @notice Tests that `setGasConfig` updates the overhead and scalar successfully.
-    function testFuzz_setGasConfig_succeeds(uint256 newOverhead, uint256 newScalar) external {
-        // always zero out most significant byte
-        newScalar = (newScalar << 16) >> 16;
-        vm.expectEmit(address(systemConfig));
-        emit ConfigUpdate(0, ISystemConfig.UpdateType.FEE_SCALARS, abi.encode(newOverhead, newScalar));
-
-        vm.prank(systemConfig.owner());
-        systemConfig.setGasConfig(newOverhead, newScalar);
-        assertEq(systemConfig.overhead(), newOverhead);
-        assertEq(systemConfig.scalar(), newScalar);
-    }
-}
-
 /// @title SystemConfig_SetGasConfigEcotone_Test
 /// @notice Test contract for SystemConfig `setGasConfigEcotone` function.
 contract SystemConfig_SetGasConfigEcotone_Test is SystemConfig_TestInit {
@@ -406,17 +403,22 @@ contract SystemConfig_SetGasConfigEcotone_Test is SystemConfig_TestInit {
     }
 
     function testFuzz_setGasConfigEcotone_succeeds(uint32 _basefeeScalar, uint32 _blobbasefeeScalar) external {
+        // Seed `overhead` so the event assertion proves the emitted zero is hardcoded, not read.
+        StorageSlot memory overheadSlot = ForgeArtifacts.getSlot("SystemConfig", "overhead");
+        vm.store(address(systemConfig), bytes32(overheadSlot.slot), bytes32(uint256(2100)));
+
         bytes32 encoded =
             ffi.encodeScalarEcotone({ _basefeeScalar: _basefeeScalar, _blobbasefeeScalar: _blobbasefeeScalar });
 
         vm.expectEmit(address(systemConfig));
-        emit ConfigUpdate(0, ISystemConfig.UpdateType.FEE_SCALARS, abi.encode(systemConfig.overhead(), encoded));
+        emit ConfigUpdate(0, ISystemConfig.UpdateType.FEE_SCALARS, abi.encode(uint256(0), encoded));
 
         vm.prank(systemConfig.owner());
         systemConfig.setGasConfigEcotone({ _basefeeScalar: _basefeeScalar, _blobbasefeeScalar: _blobbasefeeScalar });
         assertEq(systemConfig.basefeeScalar(), _basefeeScalar);
         assertEq(systemConfig.blobbasefeeScalar(), _blobbasefeeScalar);
         assertEq(systemConfig.scalar(), uint256(encoded));
+        assertEq(systemConfig.overhead(), 2100);
 
         (uint32 basefeeScalar, uint32 blobbbasefeeScalar) = ffi.decodeScalarEcotone(encoded);
         assertEq(uint256(basefeeScalar), uint256(_basefeeScalar));
@@ -608,7 +610,6 @@ contract SystemConfig_SetResourceConfig_Test is SystemConfig_TestInit {
             _gasLimit: gasLimit,
             _unsafeBlockSigner: address(0),
             _config: config,
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -645,27 +646,18 @@ contract SystemConfig_Paused_Test is SystemConfig_TestInit {
         assertTrue(systemConfig.paused());
     }
 
-    /// @notice Tests that `paused()` returns true when OptimismPortal identifier is paused and
-    ///         the ETH_LOCKBOX feature is disabled.
+    /// @notice Tests that `paused()` ignores the legacy portal pause key.
     function test_paused_optimismPortalIdentifier_succeeds() external {
-        skipIfSysFeatureEnabled(Features.ETH_LOCKBOX);
-
-        // Initially not paused
         assertFalse(systemConfig.paused());
 
-        // Pause the system with OptimismPortal identifier
         vm.prank(superchainConfig.guardian());
         superchainConfig.pause(address(optimismPortal2));
 
-        // Verify paused state
-        assertTrue(systemConfig.paused());
+        assertFalse(systemConfig.paused());
     }
 
-    /// @notice Tests that `paused()` returns true when ETHLockbox identifier is paused and
-    ///         ETH_LOCKBOX feature is enabled.
+    /// @notice Tests that `paused()` uses the ETHLockbox.
     function test_paused_ethLockboxIdentifier_succeeds() external {
-        skipIfSysFeatureDisabled(Features.ETH_LOCKBOX);
-
         // Initially not paused
         assertFalse(systemConfig.paused());
 
@@ -681,10 +673,10 @@ contract SystemConfig_Paused_Test is SystemConfig_TestInit {
     function test_paused_bothPausesActive_succeeds() external {
         assertFalse(systemConfig.paused());
 
-        // Pause both globally and with identifier
+        // Pause globally and by lockbox.
         vm.startPrank(superchainConfig.guardian());
         superchainConfig.pause(address(0));
-        superchainConfig.pause(address(optimismPortal2));
+        superchainConfig.pause(address(ethLockbox));
         vm.stopPrank();
 
         // Verify paused state
@@ -713,6 +705,8 @@ contract SystemConfig_Paused_Test is SystemConfig_TestInit {
 /// @title SystemConfig_SetFeature_Test
 /// @notice Test contract for SystemConfig `setFeature` function.
 contract SystemConfig_SetFeature_Test is SystemConfig_TestInit {
+    using stdStorage for StdStorage;
+
     event FeatureSet(bytes32 indexed feature, bool indexed enabled);
 
     /// @notice Tests that `setFeature` reverts if the caller is not ProxyAdmin or ProxyAdmin owner.
@@ -807,68 +801,42 @@ contract SystemConfig_SetFeature_Test is SystemConfig_TestInit {
         systemConfig.setFeature("EXAMPLE FEATURE", false);
     }
 
-    /// @notice Tests that disabling ETH_LOCKBOX reverts if the OptimismPortal has a non-zero
-    ///         ETHLockbox configured.
-    function test_setFeature_ethLockboxDisableWhileConfigured_reverts() external {
+    /// @notice Tests that ETH_LOCKBOX cannot be disabled.
+    function test_setFeature_ethLockboxDisable_reverts() external {
         address proxyAdmin = address(systemConfig.proxyAdmin());
-
-        // Ensure ETH_LOCKBOX is enabled first (no pause active in fresh setup).
-        if (!systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
-            vm.prank(proxyAdmin);
-            systemConfig.setFeature(Features.ETH_LOCKBOX, true);
-            assertTrue(systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
-        }
-
-        // Force the portal to have a configured ETHLockbox address.
-        StorageSlot memory slot = ForgeArtifacts.getSlot("OptimismPortal2", "ethLockbox");
-        vm.store(address(optimismPortal2), bytes32(slot.slot), bytes32(uint256(uint160(address(1)))));
-
-        // Disabling should revert due to safety check while lockbox is configured.
+        stdstore.target(address(systemConfig)).sig("isFeatureEnabled(bytes32)").with_key(Features.ETH_LOCKBOX)
+            .checked_write(true);
         vm.expectRevert(ISystemConfig.SystemConfig_InvalidFeatureState.selector);
         vm.prank(proxyAdmin);
         systemConfig.setFeature(Features.ETH_LOCKBOX, false);
     }
 
-    /// @notice Tests that enabling ETH_LOCKBOX while the system is paused (global) reverts.
-    function test_setFeature_ethLockboxEnableWhilePaused_reverts() external {
+    /// @notice Tests that a global pause does not block ETHLockbox activation.
+    function test_setFeature_ethLockboxEnableWhileGloballyPaused_succeeds() external {
         address proxyAdmin = address(systemConfig.proxyAdmin());
+        stdstore.target(address(systemConfig)).sig("isFeatureEnabled(bytes32)").with_key(Features.ETH_LOCKBOX)
+            .checked_write(false);
 
-        // Ensure ETH_LOCKBOX is enabled first (no pause active in fresh setup).
-        if (!systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
-            vm.prank(proxyAdmin);
-            systemConfig.setFeature(Features.ETH_LOCKBOX, true);
-            assertTrue(systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
-        }
-
-        // Pause globally.
         vm.prank(superchainConfig.guardian());
         superchainConfig.pause(address(0));
 
-        // Enabling while paused should revert.
+        vm.prank(proxyAdmin);
+        systemConfig.setFeature(Features.ETH_LOCKBOX, true);
+        assertTrue(systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
+        assertTrue(systemConfig.paused());
+    }
+
+    /// @notice Tests that a portal-scoped pause blocks ETHLockbox activation.
+    function test_setFeature_ethLockboxEnableWhilePortalPaused_reverts() external {
+        address proxyAdmin = address(systemConfig.proxyAdmin());
+        stdstore.target(address(systemConfig)).sig("isFeatureEnabled(bytes32)").with_key(Features.ETH_LOCKBOX)
+            .checked_write(false);
+        vm.prank(superchainConfig.guardian());
+        superchainConfig.pause(address(optimismPortal2));
+
         vm.expectRevert(ISystemConfig.SystemConfig_InvalidFeatureState.selector);
         vm.prank(proxyAdmin);
         systemConfig.setFeature(Features.ETH_LOCKBOX, true);
-    }
-
-    /// @notice Tests that disabling ETH_LOCKBOX while the system is paused (global) reverts.
-    function test_setFeature_ethLockboxDisableWhilePaused_reverts() external {
-        address proxyAdmin = address(systemConfig.proxyAdmin());
-
-        // Ensure ETH_LOCKBOX is enabled first.
-        if (!systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
-            vm.prank(proxyAdmin);
-            systemConfig.setFeature(Features.ETH_LOCKBOX, true);
-            assertTrue(systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
-        }
-
-        // Pause globally.
-        vm.prank(superchainConfig.guardian());
-        superchainConfig.pause(address(0));
-
-        // Disabling while paused should revert.
-        vm.expectRevert(ISystemConfig.SystemConfig_InvalidFeatureState.selector);
-        vm.prank(proxyAdmin);
-        systemConfig.setFeature(Features.ETH_LOCKBOX, false);
     }
 }
 

@@ -36,16 +36,12 @@ pragma solidity 0.8.15;
 import { Script } from "forge-std/Script.sol";
 
 import { Constants } from "src/libraries/Constants.sol";
-import { Constants as ScriptConstants } from "scripts/libraries/Constants.sol";
 import { Types } from "scripts/libraries/Types.sol";
 import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 
 import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
-import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
-import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
-import { IOPContractsManagerMigrator } from "interfaces/L1/opcm/IOPContractsManagerMigrator.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
@@ -59,8 +55,8 @@ import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
 import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
+import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
 import { GameType, GameTypes } from "src/dispute/lib/Types.sol";
-import { DevFeatures } from "src/libraries/DevFeatures.sol";
 
 import { RSKOPCMSplitter } from "../contracts/RSKOPCMSplitter.sol";
 
@@ -68,9 +64,6 @@ contract RSKDeployOPChain is Script {
     /// @notice Default init bond for the dispute games (matches upstream
     ///         `DeployOPChain.DEFAULT_INIT_BOND`).
     uint256 public constant DEFAULT_INIT_BOND = 0.08 ether;
-
-    /// @notice Whether the OPCM has SUPER_ROOT_GAMES_MIGRATION enabled.
-    bool public isSuperRoot;
 
     /// @notice Output struct identical to upstream `DeployOPChain.Output` so
     ///         broadcast.json's `returns` field stays byte-compatible with
@@ -150,23 +143,16 @@ contract RSKDeployOPChain is Script {
         require(address(_input.opcm).code.length > 0, "RSKDeployOPChain: OPCM address has no code");
 
         IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_input.opcm);
-        isSuperRoot = DevFeatures.isDevFeatureEnabled(opcmV2.devFeatureBitmap(), DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
-
-        // Pull the same constructor deps the deployed OPCMv2 was built with —
-        // splitter must reference the same Container/Utils/Migrator contracts
-        // or the inherited `_loadOrDeployProxy` / `_upgrade` helpers will
-        // delegatecall into the wrong utils bytecode.
-        IOPContractsManagerUtils utils = opcmV2.opcmUtils();
-        IOPContractsManagerContainer container = opcmV2.contractsContainer();
-        IOPContractsManagerStandardValidator validator = opcmV2.opcmStandardValidator();
-        IOPContractsManagerMigrator migrator = opcmV2.opcmMigrator();
 
         // Build the FullConfig identically to upstream `_toOPCMV2DeployInput`.
         RSKOPCMSplitter.FullConfig memory cfg = _toFullConfig(_input, _initBond);
 
         // ----------- BROADCAST 1 — deploy the splitter -----------
+        // The splitter checks `opcmV2`'s version and reads its utils and
+        // container from it, so its inherited helpers delegatecall into the
+        // same utils.
         vm.broadcast(msg.sender);
-        RSKOPCMSplitter splitter = new RSKOPCMSplitter(utils, container, validator, migrator);
+        RSKOPCMSplitter splitter = new RSKOPCMSplitter(opcmV2);
 
         // ----------- BROADCAST 2 — core proxies (1st half of _loadChainContracts) -----------
         vm.broadcast(msg.sender);
@@ -224,7 +210,7 @@ contract RSKDeployOPChain is Script {
 
     function _toFullConfig(Types.DeployOPChainInput memory _input, uint256 _initBond)
         internal
-        view
+        pure
         returns (RSKOPCMSplitter.FullConfig memory cfg_)
     {
         require(
@@ -239,68 +225,21 @@ contract RSKDeployOPChain is Script {
             challenger: _input.challenger
         });
 
-        // Only the enabled permissioned game takes `_initBond`; every disabled
-        // entry below keeps a literal 0, which the splitter's config
-        // validation requires (RSKOPCMSplitter reverts
-        // `RSKOPCMSplitter_InvalidGameConfigs` on disabled + non-zero).
+        // Order must match VALID_GAME_TYPES in RSKOPCMSplitter._assertValidFullConfig
+        // (the same order upstream's OPContractsManagerV2 requires). RSK enables
+        // only PERMISSIONED_CANNON, with `_initBond`, even though OPCMv2 9.0.2
+        // hard-wires SUPER_ROOT_GAMES_MIGRATION on (see the splitter's header).
+        // Every disabled entry keeps a literal 0 bond, which the splitter requires.
         IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
             new IOPContractsManagerUtils.DisputeGameConfig[](6);
 
-        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: false,
-            initBond: 0,
-            gameType: GameTypes.CANNON,
-            gameArgs: bytes("")
-        });
-
-        disputeGameConfigs[1] = isSuperRoot
-            ? IOPContractsManagerUtils.DisputeGameConfig({
-                enabled: false,
-                initBond: 0,
-                gameType: GameTypes.PERMISSIONED_CANNON,
-                gameArgs: bytes("")
-            })
-            : IOPContractsManagerUtils.DisputeGameConfig({
-                enabled: true,
-                initBond: _initBond,
-                gameType: GameTypes.PERMISSIONED_CANNON,
-                gameArgs: abi.encode(pdgConfig)
-            });
-
-        disputeGameConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: false,
-            initBond: 0,
-            gameType: GameTypes.CANNON_KONA,
-            gameArgs: bytes("")
-        });
-
-        disputeGameConfigs[3] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: false,
-            initBond: 0,
-            gameType: GameTypes.SUPER_CANNON,
-            gameArgs: bytes("")
-        });
-
-        disputeGameConfigs[4] = isSuperRoot
-            ? IOPContractsManagerUtils.DisputeGameConfig({
-                enabled: true,
-                initBond: _initBond,
-                gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
-                gameArgs: abi.encode(pdgConfig)
-            })
-            : IOPContractsManagerUtils.DisputeGameConfig({
-                enabled: false,
-                initBond: 0,
-                gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
-                gameArgs: bytes("")
-            });
-
-        disputeGameConfigs[5] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: false,
-            initBond: 0,
-            gameType: GameTypes.SUPER_CANNON_KONA,
-            gameArgs: bytes("")
-        });
+        disputeGameConfigs[0] = _createGameConfig(false, 0, GameTypes.CANNON, bytes(""));
+        disputeGameConfigs[1] =
+            _createGameConfig(true, _initBond, GameTypes.PERMISSIONED_CANNON, abi.encode(pdgConfig));
+        disputeGameConfigs[2] = _createGameConfig(false, 0, GameTypes.CANNON_KONA, bytes(""));
+        disputeGameConfigs[3] = _createGameConfig(false, 0, GameTypes.SUPER_PERMISSIONED, bytes(""));
+        disputeGameConfigs[4] = _createGameConfig(false, 0, GameTypes.SUPER_CANNON_KONA, bytes(""));
+        disputeGameConfigs[5] = _createGameConfig(false, 0, GameTypes.ZK_DISPUTE_GAME, bytes(""));
 
         cfg_ = RSKOPCMSplitter.FullConfig({
             saltMixer: _input.saltMixer,
@@ -309,16 +248,57 @@ contract RSKDeployOPChain is Script {
             systemConfigOwner: _input.systemConfigOwner,
             unsafeBlockSigner: _input.unsafeBlockSigner,
             batcher: _input.batcher,
-            startingAnchorRoot: ScriptConstants.DEFAULT_OUTPUT_ROOT(),
-            startingRespectedGameType: isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON,
+            startingAnchorRoot: _input.startingAnchorRoot,
+            startingRespectedGameType: GameTypes.PERMISSIONED_CANNON,
             basefeeScalar: _input.basefeeScalar,
             blobBasefeeScalar: _input.blobBaseFeeScalar,
             gasLimit: _input.gasLimit,
             l2ChainId: _input.l2ChainId,
-            resourceConfig: Constants.DEFAULT_RESOURCE_CONFIG(),
+            resourceConfig: _resourceConfigForGasLimit(_input.gasLimit),
             disputeGameConfigs: disputeGameConfigs,
             useCustomGasToken: _input.useCustomGasToken
         });
+    }
+
+    /// @notice Verbatim port of upstream `DeployOPChain._createGameConfig`: a
+    ///         disabled game gets a zero bond and empty arguments.
+    function _createGameConfig(
+        bool _enabled,
+        uint256 _initBond,
+        GameType _gameType,
+        bytes memory _enabledArgs
+    )
+        internal
+        pure
+        returns (IOPContractsManagerUtils.DisputeGameConfig memory)
+    {
+        return IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: _enabled,
+            initBond: _enabled ? _initBond : 0,
+            gameType: _gameType,
+            gameArgs: _enabled ? _enabledArgs : bytes("")
+        });
+    }
+
+    /// @notice Verbatim port of upstream `DeployOPChain._resourceConfigForGasLimit`:
+    ///         DEFAULT_RESOURCE_CONFIG, shrunk to fit an L2 gas limit below its
+    ///         reserved gas.
+    function _resourceConfigForGasLimit(uint64 _gasLimit)
+        internal
+        pure
+        returns (IResourceMetering.ResourceConfig memory cfg_)
+    {
+        cfg_ = Constants.DEFAULT_RESOURCE_CONFIG();
+        uint64 reserved = uint64(cfg_.maxResourceLimit) + uint64(cfg_.systemTxMaxGas);
+        if (_gasLimit >= reserved) {
+            return cfg_;
+        }
+
+        require(_gasLimit > uint64(cfg_.systemTxMaxGas), "RSKDeployOPChain: gasLimit must exceed systemTxMaxGas");
+        uint64 available = _gasLimit - uint64(cfg_.systemTxMaxGas);
+        uint64 mult = uint64(cfg_.elasticityMultiplier);
+        cfg_.maxResourceLimit = uint32((available / mult) * mult);
+        require(cfg_.maxResourceLimit > 0, "RSKDeployOPChain: gasLimit too small for any deposit budget");
     }
 
     function _fromChainContractsToOutput(RSKOPCMSplitter.ChainContracts memory _cts)
@@ -326,8 +306,7 @@ contract RSKDeployOPChain is Script {
         view
         returns (Output memory output_)
     {
-        GameType permGameType = isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON;
-        address permissionedDgImpl = address(_cts.disputeGameFactory.gameImpls(permGameType));
+        address permissionedDgImpl = address(_cts.disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON));
 
         output_ = Output({
             opChainProxyAdmin: _cts.proxyAdmin,
@@ -341,8 +320,10 @@ contract RSKDeployOPChain is Script {
             ethLockboxProxy: _cts.ethLockbox,
             disputeGameFactoryProxy: _cts.disputeGameFactory,
             anchorStateRegistryProxy: _cts.anchorStateRegistry,
-            // Match upstream OPCMv2 behaviour: faultDisputeGame is unset on
-            // initial deployment (no prestate exists for permissionless games).
+            // Upstream reads its family's permissionless game here. RSK enables
+            // only a permissioned game, PERMISSIONED_CANNON now and
+            // SUPER_PERMISSIONED once PAYROLLUP-16 lands, so the slot is zero
+            // in either family.
             faultDisputeGame: IFaultDisputeGame(address(0)),
             permissionedDisputeGame: IPermissionedDisputeGame(permissionedDgImpl),
             delayedWETHPermissionedGameProxy: _cts.delayedWETH,
@@ -376,6 +357,11 @@ contract RSKDeployOPChain is Script {
         require(_i.disputeSplitDepth != 0, "RSKDeployOPChainInput: disputeSplitDepth not set");
         require(_i.disputeMaxClockDuration.raw() != 0, "RSKDeployOPChainInput: disputeMaxClockDuration not set");
         require(_i.disputeAbsolutePrestate.raw() != bytes32(0), "RSKDeployOPChainInput: disputeAbsolutePrestate not set");
+        require(_i.startingAnchorRoot.root.raw() != bytes32(0), "RSKDeployOPChainInput: startingAnchorRoot not set");
+        require(
+            _i.startingAnchorRoot.l2SequenceNumber < type(uint64).max,
+            "RSKDeployOPChainInput: startingAnchorRoot.l2SequenceNumber too large"
+        );
     }
 
     /// @notice Smoke-test the deployed addresses are non-zero and have code.

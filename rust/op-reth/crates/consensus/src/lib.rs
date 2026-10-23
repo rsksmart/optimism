@@ -15,8 +15,9 @@ use alloc::{format, sync::Arc};
 use alloy_consensus::{
     BlockHeader as _, EMPTY_OMMER_ROOT_HASH, constants::MAXIMUM_EXTRA_DATA_SIZE,
 };
-use alloy_primitives::B64;
+use alloy_primitives::{B64, B256};
 use core::fmt::Debug;
+use op_alloy_consensus::OpTransaction;
 use reth_chainspec::EthChainSpec;
 use reth_consensus::{Consensus, ConsensusError, FullConsensus, HeaderValidator, ReceiptRootBloom};
 use reth_consensus_common::validation::{
@@ -34,6 +35,9 @@ use reth_primitives_traits::{
 
 mod proof;
 pub use proof::calculate_receipt_root_no_memo_optimism;
+
+#[cfg(feature = "std")]
+mod sdm_metrics;
 
 pub mod validation;
 pub use validation::{canyon, isthmus, validate_block_post_execution};
@@ -72,7 +76,7 @@ impl<ChainSpec> OpBeaconConsensus<ChainSpec> {
 
 impl<N, ChainSpec> FullConsensus<N> for OpBeaconConsensus<ChainSpec>
 where
-    N: NodePrimitives<Receipt: DepositReceipt>,
+    N: NodePrimitives<Receipt: DepositReceipt, SignedTx: OpTransaction>,
     ChainSpec: EthChainSpec<Header = N::BlockHeader> + OpHardforks + Debug + Send + Sync,
 {
     fn validate_block_post_execution(
@@ -80,8 +84,17 @@ where
         block: &RecoveredBlock<N::Block>,
         result: &BlockExecutionResult<N::Receipt>,
         receipt_root_bloom: Option<ReceiptRootBloom>,
+        _block_access_list_hash: Option<B256>,
     ) -> Result<(), ConsensusError> {
-        validate_block_post_execution(block.header(), &self.chain_spec, result, receipt_root_bloom)
+        validate_block_post_execution(
+            block.header(),
+            &self.chain_spec,
+            result,
+            receipt_root_bloom,
+        )?;
+        #[cfg(feature = "std")]
+        sdm_metrics::record_validated_block(block.header().gas_used(), block.body().transactions());
+        Ok(())
     }
 }
 
@@ -413,6 +426,7 @@ mod tests {
             &block,
             &result,
             None,
+            None,
         );
 
         // validate blob, it should pass blob gas used validation
@@ -482,6 +496,7 @@ mod tests {
             &beacon_consensus,
             &block,
             &result,
+            None,
             None,
         );
 

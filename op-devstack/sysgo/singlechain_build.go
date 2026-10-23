@@ -2,6 +2,7 @@ package sysgo
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -13,34 +14,29 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params/forks"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/intentbuilder"
-	faucetConfig "github.com/ethereum-optimism/optimism/op-faucet/config"
-	"github.com/ethereum-optimism/optimism/op-faucet/faucet"
-	fconf "github.com/ethereum-optimism/optimism/op-faucet/faucet/backend/config"
-	ftypes "github.com/ethereum-optimism/optimism/op-faucet/faucet/backend/types"
 	"github.com/ethereum-optimism/optimism/op-node/config"
 	opNodeFlags "github.com/ethereum-optimism/optimism/op-node/flags"
 	"github.com/ethereum-optimism/optimism/op-node/p2p"
 	p2pcli "github.com/ethereum-optimism/optimism/op-node/p2p/cli"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	nodeSync "github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/endpoint"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum-optimism/optimism/op-service/log/logcli"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	"github.com/ethereum-optimism/optimism/op-service/retry"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
+	opsigner "github.com/ethereum-optimism/optimism/op-service/signer"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	sequencerConfig "github.com/ethereum-optimism/optimism/op-test-sequencer/config"
 	testmetrics "github.com/ethereum-optimism/optimism/op-test-sequencer/metrics"
 	"github.com/ethereum-optimism/optimism/op-test-sequencer/sequencer"
@@ -66,45 +62,6 @@ type testSequencer struct {
 	service    *sequencer.Service
 }
 
-func buildSingleChainWorld(t devtest.T, keys devkeys.Keys, localContractArtifactsPath string, deployerOpts ...DeployerOption) (*L1Network, *L2Network) {
-	wb := &worldBuilder{
-		p:       t,
-		logger:  t.Logger(),
-		require: t.Require(),
-		keys:    keys,
-		builder: intentbuilder.New(),
-	}
-
-	applyConfigLocalContractSources(t, keys, wb.builder, localContractArtifactsPath)
-	applyConfigCommons(t, keys, DefaultL1ID, wb.builder)
-	applyConfigPrefundedL2(t, keys, DefaultL1ID, DefaultL2AID, wb.builder)
-	applyConfigDeployerOptions(t, keys, wb.builder, deployerOpts)
-	wb.Build()
-
-	t.Require().Len(wb.l2Chains, 1, "expected exactly one L2 chain in flashblocks world")
-	l2ID := wb.l2Chains[0]
-	l1ID := eth.ChainIDFromUInt64(wb.output.AppliedIntent.L1ChainID)
-
-	l1Net := &L1Network{
-		name:      "l1",
-		chainID:   l1ID,
-		genesis:   wb.outL1Genesis,
-		blockTime: 6,
-	}
-	l2Net := &L2Network{
-		name:       "l2a",
-		chainID:    l2ID,
-		l1ChainID:  l1ID,
-		genesis:    wb.outL2Genesis[l2ID],
-		rollupCfg:  wb.outL2RollupCfg[l2ID],
-		deployment: wb.outL2Deployment[l2ID],
-		opcmImpl:   wb.output.ImplementationsDeployment.OpcmV2Impl,
-		mipsImpl:   wb.output.ImplementationsDeployment.MipsImpl,
-		keys:       keys,
-	}
-	return l1Net, l2Net
-}
-
 func applyConfigLocalContractSources(t devtest.T, _ devkeys.Keys, builder intentbuilder.Builder, artifactsPath string) {
 	contractArtifacts, err := localContractSourcesLocator(artifactsPath)
 	t.Require().NoError(err)
@@ -113,22 +70,7 @@ func applyConfigLocalContractSources(t devtest.T, _ devkeys.Keys, builder intent
 }
 
 func applyConfigCommons(t devtest.T, keys devkeys.Keys, l1ChainID eth.ChainID, builder intentbuilder.Builder) {
-	_, l1Config := builder.WithL1(l1ChainID)
-
-	l1StartTimestamp := uint64(time.Now().Unix()) + 1
-	l1Config.WithTimestamp(l1StartTimestamp)
-	l1Config.WithL1ForkAtGenesis(forks.Prague)
-
-	faucetFunderAddr, err := keys.Address(devkeys.UserKey(funderMnemonicIndex))
-	t.Require().NoError(err, "need funder addr")
-	l1Config.WithPrefundedAccount(faucetFunderAddr, *eth.BillionEther.ToU256())
-
-	addrFor := intentbuilder.RoleToAddrProvider(t, keys, l1ChainID)
-	_, superCfg := builder.WithSuperchain()
-	intentbuilder.WithDevkeySuperRoles(t, keys, l1ChainID, superCfg)
-	l1Config.WithPrefundedAccount(addrFor(devkeys.SuperchainProxyAdminOwner), *millionEth)
-	l1Config.WithPrefundedAccount(addrFor(devkeys.SuperchainConfigGuardianKey), *millionEth)
-	l1Config.WithPrefundedAccount(addrFor(devkeys.L1ProxyAdminOwnerRole), *millionEth)
+	WithCommons(l1ChainID)(t, keys, builder)
 }
 
 func applyConfigPrefundedL2(t devtest.T, keys devkeys.Keys, l1ChainID, l2ChainID eth.ChainID, builder intentbuilder.Builder) {
@@ -137,9 +79,9 @@ func applyConfigPrefundedL2(t devtest.T, keys devkeys.Keys, l1ChainID, l2ChainID
 	intentbuilder.WithDevkeyL2Roles(t, keys, l2Config)
 	intentbuilder.WithDevkeyL1Roles(t, keys, l2Config, l1ChainID)
 
-	faucetFunderAddr, err := keys.Address(devkeys.UserKey(funderMnemonicIndex))
+	funderAddr, err := keys.Address(devkeys.UserKey(funderMnemonicIndex))
 	t.Require().NoError(err, "need funder addr")
-	l2Config.WithPrefundedAccount(faucetFunderAddr, *eth.BillionEther.ToU256())
+	l2Config.WithPrefundedAccount(funderAddr, *eth.BillionEther.ToU256())
 
 	addrFor := intentbuilder.RoleToAddrProvider(t, keys, l2ChainID)
 	l1Config := l2Config.L1Config()
@@ -151,19 +93,28 @@ func applyConfigPrefundedL2(t devtest.T, keys devkeys.Keys, l1ChainID, l2ChainID
 
 // startL2ELForKey starts an L2 EL node for the given key, respecting DEVSTACK_L2EL_KIND.
 // This is the single env-aware dispatch point for L2 EL selection.
-func startL2ELForKey(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, key string, identity *ELNodeIdentity) L2ELNode {
-	switch devstackL2ELKind() {
+func startL2ELForKey(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, key string, identity *ELNodeIdentity, opts ...OpRethOption) L2ELNode {
+	switch k := devstackL2ELKind(); k {
 	case MixedL2ELOpGeth:
+		// op-reth options have no analogue on these kinds. Dropping them silently would make a
+		// binary override look like it took effect on a node that never saw it.
+		t.Require().Empty(opts, "op-reth options cannot be applied to EL kind %q", k)
 		return startL2ELNode(t, l2Net, jwtPath, jwtSecret, key, identity)
 	case MixedL2ELOpRethV2:
-		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v2")
-	default: // op-reth v1
-		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v1")
+		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v2", opts...)
+	case "", MixedL2ELOpReth: // unset (default) or explicit op-reth v1
+		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v1", opts...)
+	default:
+		t.Require().FailNow("unsupported L2 EL kind", "unknown DEVSTACK_L2EL_KIND %q", k)
+		return nil // unreachable
 	}
 }
 
 // startL2CLForKey starts an L2 CL node for the given key, respecting DEVSTACK_L2CL_KIND.
-// This is the single env-aware dispatch point for L2 CL selection.
+// This is the env-aware dispatch point for preset runtimes that don't build explicit node
+// specs. Runtimes constructed from explicit MixedSingleChainNodeSpec.CLKind values (e.g.
+// NewMixedSingleChainRuntime) don't route through here; they resolve the env up front via
+// ResolveMixedL2CLKind instead.
 func startL2CLForKey(
 	t devtest.T,
 	keys devkeys.Keys,
@@ -187,15 +138,14 @@ func startL2CLForKey(
 			IsSequencer:    isSequencer,
 			NoDiscovery:    true,
 			EnableReqResp:  true,
-			UseReqResp:     true,
 			L2FollowSource: followSource,
 			L2CLOptions:    l2CLOpts,
 		})
 	}
 }
 
-func startSequencerEL(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, identity *ELNodeIdentity) L2ELNode {
-	return startL2ELForKey(t, l2Net, jwtPath, jwtSecret, "sequencer", identity)
+func startSequencerEL(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, identity *ELNodeIdentity, opts ...OpRethOption) L2ELNode {
+	return startL2ELForKey(t, l2Net, jwtPath, jwtSecret, "sequencer", identity, opts...)
 }
 
 func startL2ELNode(
@@ -225,7 +175,7 @@ func startL2ELNode(
 	return l2EL
 }
 
-func connectL2ELPeers(t devtest.T, logger log.Logger, initiatorRPC, acceptorRPC string, trusted bool) {
+func connectL2ELPeers(t devtest.T, logger log.Logger, initiatorRPC, acceptorRPC string) {
 	require := t.Require()
 	rpc1, err := dial.DialRPCClientWithTimeout(t.Ctx(), logger, initiatorRPC)
 	require.NoError(err, "failed to connect initiator EL RPC")
@@ -233,7 +183,7 @@ func connectL2ELPeers(t devtest.T, logger log.Logger, initiatorRPC, acceptorRPC 
 	rpc2, err := dial.DialRPCClientWithTimeout(t.Ctx(), logger, acceptorRPC)
 	require.NoError(err, "failed to connect acceptor EL RPC")
 	defer rpc2.Close()
-	ConnectP2P(t.Ctx(), require, rpc1, rpc2, trusted)
+	ConnectP2P(t.Ctx(), require, rpc1, rpc2)
 }
 
 func connectL2CLPeers(t devtest.T, logger log.Logger, l2CL1, l2CL2 L2CLNode) {
@@ -282,11 +232,25 @@ type l2CLNodeStartConfig struct {
 	IsSequencer    bool
 	NoDiscovery    bool
 	EnableReqResp  bool
-	UseReqResp     bool
-	IndexingMode   bool
 	L2FollowSource string
 	DependencySet  depset.DependencySet
 	L2CLOptions    []L2CLOption
+	// SyncMode overrides the sequencer and verifier sync modes; defaults to CLSync if unset.
+	SyncMode nodeSync.Mode
+	// SequencerStopped starts the sequencer in the stopped state (it must be
+	// activated later via the StartSequencer RPC). Only meaningful when IsSequencer.
+	SequencerStopped bool
+}
+
+// renewableP2PSignerSetup mints a fresh signer on every SetupSigner call, so
+// an op-node that is stopped and started again (which closes the previous
+// signer) can keep signing gossip after the restart.
+type renewableP2PSignerSetup struct {
+	priv *ecdsa.PrivateKey
+}
+
+func (s *renewableP2PSignerSetup) SetupSigner(context.Context) (p2p.Signer, error) {
+	return opsigner.NewLocalSigner(s.priv), nil
 }
 
 func startL2CLNode(
@@ -305,8 +269,6 @@ func startL2CLNode(
 	cfg.IsSequencer = startCfg.IsSequencer
 	cfg.NoDiscovery = startCfg.NoDiscovery
 	cfg.EnableReqRespSync = startCfg.EnableReqResp
-	cfg.UseReqRespSync = startCfg.UseReqResp
-	cfg.IndexingMode = startCfg.IndexingMode
 	cfg.FollowSource = startCfg.L2FollowSource
 	if len(startCfg.L2CLOptions) > 0 {
 		l2CLTarget := NewComponentTarget(startCfg.Key, l2Net.ChainID())
@@ -316,6 +278,11 @@ func startL2CLNode(
 			}
 			opt.Apply(t, l2CLTarget, cfg)
 		}
+	}
+
+	if startCfg.SyncMode != 0 {
+		cfg.SequencerSyncMode = startCfg.SyncMode
+		cfg.VerifierSyncMode = startCfg.SyncMode
 	}
 
 	syncMode := cfg.VerifierSyncMode
@@ -350,24 +317,22 @@ func startL2CLNode(
 	if cfg.IsSequencer {
 		p2pKey, err := keys.Secret(devkeys.SequencerP2PRole.Key(l2Net.ChainID().ToBig()))
 		require.NoError(err, "need p2p key for sequencer")
-		p2pKeyHex := hex.EncodeToString(crypto.FromECDSA(p2pKey))
-		require.NoError(fs.Set(opNodeFlags.SequencerP2PKeyName, p2pKeyHex))
-		p2pSignerSetup, err = p2pcli.LoadSignerSetup(cliCtx, logger)
-		require.NoError(err, "failed to load p2p signer")
+		// Not a PreparedSigner: the node closes its signer on shutdown, and a
+		// PreparedSigner would hand the closed instance back to a restarted
+		// node, leaving it unable to sign gossip ("signer is closed").
+		p2pSignerSetup = &renewableP2PSignerSetup{priv: p2pKey}
 	}
 	p2pConfig, err := p2pcli.NewConfig(cliCtx, l2Net.rollupCfg.BlockTime)
 	require.NoError(err, "failed to load p2p config")
 	p2pConfig.NoDiscovery = cfg.NoDiscovery
 	p2pConfig.EnableReqRespSync = cfg.EnableReqRespSync
-
-	interopCfg := &interop.Config{}
-	if startCfg.IndexingMode {
-		interopCfg = &interop.Config{
-			RPCAddr:          "127.0.0.1",
-			RPCPort:          0,
-			RPCJwtSecretPath: l2EL.JWTPath(),
-		}
-	}
+	// Devstack chain timestamps are synthetic: genesis is set in the past and the
+	// chain may lag many seconds behind wallclock during startup (or many minutes
+	// during long tests like dispute games). The production-default 60s gossip
+	// "too old" check then rejects otherwise-valid TestSequencer-produced blocks
+	// — surfacing as "validation failed" out of ts.Next at startup. Match the
+	// multichain devstack (see newDevstackP2PConfig) by loosening to 1 hour.
+	p2pConfig.GossipTimestampThreshold = time.Hour
 
 	nodeCfg := &config.Config{
 		L1: &config.L1EndpointConfig{
@@ -376,7 +341,7 @@ func startL2CLNode(
 			L1RPCKind:        sources.RPCKindDebugGeth,
 			RateLimit:        0,
 			BatchSize:        20,
-			HttpPollInterval: 100,
+			HttpPollInterval: 100 * time.Millisecond,
 			MaxConcurrency:   10,
 			CacheSize:        0,
 		},
@@ -392,31 +357,32 @@ func startL2CLNode(
 			BeaconAddr: l1CL.beaconHTTPAddr,
 		},
 		Driver: driver.Config{
-			SequencerEnabled:   cfg.IsSequencer,
-			SequencerConfDepth: 2,
+			SequencerEnabled:    cfg.IsSequencer,
+			SequencerStopped:    startCfg.SequencerStopped,
+			SequencerConfDepth:  2,
+			SequencerMaxSafeLag: cfg.SequencerMaxSafeLag,
 		},
-		Rollup:            *l2Net.rollupCfg,
-		DependencySet:     startCfg.DependencySet,
-		SupervisorEnabled: cfg.IndexingMode,
-		P2PSigner:         p2pSignerSetup,
+		Rollup:        *l2Net.rollupCfg,
+		DependencySet: startCfg.DependencySet,
+		P2PSigner:     p2pSignerSetup,
 		RPC: oprpc.CLIConfig{
 			ListenAddr:  "127.0.0.1",
 			ListenPort:  0,
 			EnableAdmin: true,
 		},
-		InteropConfig:               interopCfg,
 		P2P:                         p2pConfig,
 		L1EpochPollInterval:         time.Second * 2,
 		RuntimeConfigReloadInterval: 0,
 		Tracer:                      nil,
 		Sync: nodeSync.Config{
 			SyncMode:                       syncMode,
-			SyncModeReqResp:                cfg.UseReqRespSync,
 			SkipSyncStartCheck:             false,
 			SupportsPostFinalizationELSync: false,
 			L2FollowSourceEndpoint:         cfg.FollowSource,
-			NeedInitialResetEngine:         false,
-			OffsetELSafe:                   cfg.OffsetELSafe,
+			// Mirror op-node/service.go: a follow-mode sequencer needs a single
+			// initial engine reset to trigger block building (TryInitialResetEngineForSequencer).
+			NeedInitialResetEngine: cfg.IsSequencer && cfg.FollowSource != "",
+			OffsetELSafe:           cfg.OffsetELSafe,
 		},
 		ConfigPersistence:               config.DisabledConfigPersistence{},
 		Metrics:                         opmetrics.CLIConfig{},
@@ -600,9 +566,9 @@ func startTestSequencer(
 		PprofConfig: oppprof.CLIConfig{
 			ListenEnabled: false,
 		},
-		LogConfig: oplog.CLIConfig{
+		LogConfig: logcli.CLIConfig{
 			Level:  log.LevelDebug,
-			Format: oplog.FormatText,
+			Format: log.FormatText,
 		},
 		RPC: oprpc.CLIConfig{
 			ListenAddr:  "127.0.0.1",
@@ -640,62 +606,6 @@ func startTestSequencer(
 		controlRPC: controlRPCs,
 		service:    sq,
 	}
-}
-
-func startFaucets(
-	t devtest.T,
-	keys devkeys.Keys,
-	l1ChainID eth.ChainID,
-	l2ChainID eth.ChainID,
-	l1ELRPC string,
-	l2ELRPC string,
-) *faucet.Service {
-	require := t.Require()
-	logger := t.Logger().New("component", "faucet")
-
-	funderKey, err := keys.Secret(devkeys.UserKey(funderMnemonicIndex))
-	require.NoError(err, "need faucet funder key")
-	funderKeyStr := hexutil.Encode(crypto.FromECDSA(funderKey))
-
-	faucets := map[ftypes.FaucetID]*fconf.FaucetEntry{
-		ftypes.FaucetID(fmt.Sprintf("dev-faucet-%s", l1ChainID)): {
-			ELRPC:   endpoint.MustRPC{Value: endpoint.URL(l1ELRPC)},
-			ChainID: l1ChainID,
-			TxCfg: fconf.TxManagerConfig{
-				PrivateKey: funderKeyStr,
-			},
-		},
-		ftypes.FaucetID(fmt.Sprintf("dev-faucet-%s", l2ChainID)): {
-			ELRPC:   endpoint.MustRPC{Value: endpoint.URL(l2ELRPC)},
-			ChainID: l2ChainID,
-			TxCfg: fconf.TxManagerConfig{
-				PrivateKey: funderKeyStr,
-			},
-		},
-	}
-
-	cfg := &faucetConfig.Config{
-		RPC: oprpc.CLIConfig{
-			ListenAddr: "127.0.0.1",
-		},
-		Faucets: &fconf.Config{
-			Faucets: faucets,
-		},
-	}
-
-	srv, err := faucet.FromConfig(t.Ctx(), cfg, logger)
-	require.NoError(err, "failed to create faucet service")
-	require.NoError(srv.Start(t.Ctx()), "failed to start faucet service")
-
-	t.Cleanup(func() {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // force-close
-		logger.Info("Closing faucet service")
-		closeErr := srv.Stop(ctx)
-		logger.Info("Closed faucet service", "err", closeErr)
-	})
-
-	return srv
 }
 
 func copyControlRPCMap(in map[eth.ChainID]string) map[eth.ChainID]string {

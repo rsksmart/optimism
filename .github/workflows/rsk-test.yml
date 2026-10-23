@@ -47,25 +47,30 @@ jobs:
           cache: true
 
       # op-core/superchain/chain.go carries `//go:embed superchain-configs.zip`,
-      # and that zip is gitignored — it is rebuilt from the superchain-registry
-      # commit pinned in superchain-registry-commit.txt. Without it a fresh
+      # and that zip is gitignored. It is rebuilt from the superchain-registry
+      # git submodule at the repo root, and the committed
+      # superchain-configs.zip.sha256 pins the result. Without it a fresh
       # checkout cannot even load the package ("pattern
       # superchain-configs.zip: no matching files found"), so Build, Vet and
-      # Lint below all need this step first. go-tests does not: none of its
-      # scoped trees import op-core/superchain.
+      # Lint below all need these steps first.
       #
-      # Same command as `just sync-superchain`. Needs git, yq, jq and zip, all
-      # preinstalled on the runner image; ~6 s (a shallow clone of the registry).
+      # The checkout does not fetch submodules, so init that one explicitly:
+      # otherwise sync-superchain.sh falls back to `just`, which the runner
+      # does not have. Same commands as `just build-superchain-go`. Needs git,
+      # yq, jq and zip, all preinstalled on the runner image.
+      - name: Check out the superchain-registry submodule
+        run: git submodule update --init --depth 1 -- superchain-registry
+
+      # Default (verify) mode: regenerate the zip from the submodule and fail
+      # unless it matches the committed .sha256.
       - name: Sync superchain configs
         run: bash op-core/superchain/sync-superchain.sh
 
-      # The script rewrites the tracked .sha256 from the zip it just built, so a
-      # diff here means the bundle this run produced is not the one that was
-      # reviewed: either the committed hash is stale, or generation was partial
-      # (a failed registry clone, or one of the tools above missing mid-pipeline,
-      # would otherwise leave a silently truncated zip that still compiles). The
-      # zip is byte-deterministic — normalized mtimes and permissions, `zip -oX`
-      # — so an honest run reproduces the committed hash exactly.
+      # The script never rewrites the .sha256 in this mode, so this is a
+      # backstop: a diff here means the bundle this run produced is not the
+      # one that was reviewed. The zip is byte-deterministic — normalized
+      # mtimes and permissions, `zip -oX` — so an honest run reproduces the
+      # committed hash exactly.
       - name: Verify the superchain bundle is the reviewed one
         run: git diff --exit-code -- op-core/superchain/superchain-configs.zip.sha256
 
@@ -120,15 +125,19 @@ jobs:
   # That job exists separately, in rsk-contracts-test.yml.
   #
   # TestLastStepCacheAccuracy is skipped: it needs gitignored cannon artifacts
-  # (`cd cannon && make cannon elf`), and it only exercises cannon step caching,
-  # so it runs no txmgr/sources code. Its package does depend on both, through
-  # op-program/host/kvstore, so do not read the skip as "no RSK code here"
-  # (PAYROLLUP-132).
+  # (`cd cannon && just cannon diff-hello-elf`), and it only exercises cannon
+  # step caching, so it runs no txmgr/sources code. Its package does depend on
+  # both, through op-program/host/kvstore, so do not read the skip as "no RSK
+  # code here" (PAYROLLUP-132).
   #
   # op-deployer bootstrap, manage, opcm, pipeline, verify and integration_test
   # are EXCLUDED here and not run by rsk-contracts-test.yml either: they need
-  # forge-artifacts or the synced superchain registry, so covering them means
-  # a Foundry-enabled job (PAYROLLUP-132).
+  # forge-artifacts, so covering them means a Foundry-enabled job
+  # (PAYROLLUP-132).
+  #
+  # For the same reason, the op-deployer root package's prepare/continue tests
+  # that load forge-artifacts (artifacts.tzst, L2Genesis, MockSP1Verifier) are
+  # skipped by name; the rest of that package still runs.
   go-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -143,9 +152,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # op-node and the other trees below import op-core/superchain, which
+      # embeds the gitignored bundle; see go-checks for these two steps.
+      - name: Check out the superchain-registry submodule
+        run: git submodule update --init --depth 1 -- superchain-registry
+
+      - name: Sync superchain configs
+        run: bash op-core/superchain/sync-superchain.sh
+
       - name: Test RSK-divergent and consumer trees
         run: |
-          go test -timeout 15m -skip '^TestLastStepCacheAccuracy$' \
+          go test -timeout 15m \
+            -skip '^(TestLastStepCacheAccuracy|TestContinueStartupGates|TestMockSP1VerifierArtifactPresent|TestPredictionDryRun_Permissionless|TestGenerateGenesisForChains_UsesPredictedAddressesAndPinnedGenesisTime|TestPrepare_RepredictionRebuildsL2Genesis)$' \
             ./op-node/... \
             ./op-service/sources/... \
             ./op-service/txmgr/... \
@@ -156,7 +174,6 @@ jobs:
             ./op-deployer/pkg/deployer/standard/... \
             ./op-deployer/pkg/deployer/state/... \
             ./op-deployer/pkg/deployer/upgrade/embedded/... \
-            ./op-deployer/pkg/deployer/upgrade/v2_0_0/... \
             ./op-deployer/pkg/deployer/validate/... \
             ./op-batcher/... \
             ./op-proposer/... \

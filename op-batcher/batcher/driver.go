@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	_ "net/http/pprof"
 	"sync"
@@ -17,7 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
@@ -26,8 +26,10 @@ import (
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 )
 
@@ -74,7 +76,7 @@ type L1Client interface {
 }
 
 type L2Client interface {
-	BlockByNumber(ctx context.Context, number *big.Int) (*types.Block, error)
+	PayloadByNumber(ctx context.Context, number uint64) (*eth.ExecutionPayloadEnvelope, error)
 }
 
 type RollupClient interface {
@@ -94,6 +96,12 @@ type DriverSetup struct {
 	ChannelConfig     ChannelConfigProvider
 	AltDA             *altda.DAClient
 	ChannelOutFactory ChannelOutFactory
+	// TxGasLimit, if non-nil, replaces maxFloorDataGas as the gas limit of each
+	// batcher tx; returning 0 leaves the limit to the txmgr's gas estimate.
+	// Non-Ethereum L1s (e.g. RSK) set it: they charge neither calldata floor, so
+	// upstream's limit can exceed RSKj's per-tx gas cap, or fall below RSK's
+	// 68 gas per non-zero byte before RSKIP400.
+	TxGasLimit TxGasLimitFn
 }
 
 // BatchSubmitter encapsulates a service responsible for submitting L2 tx
@@ -284,10 +292,10 @@ func (l *BatchSubmitter) loadBlocksIntoState(ctx context.Context, start, end uin
 		l.Log.Info("Loading range of multiple blocks into state", "start", start, "end", end)
 	}
 
-	var latestBlock *types.Block
+	var latestPayload *eth.ExecutionPayload
 	// Add all blocks to "state"
 	for i := start; i <= end; i++ {
-		block, err := l.loadBlockIntoState(ctx, i)
+		payload, err := l.loadBlockIntoState(ctx, i)
 		if errors.Is(err, ErrReorg) {
 			l.Log.Warn("Found L2 reorg", "block_number", i)
 			return err
@@ -295,7 +303,7 @@ func (l *BatchSubmitter) loadBlocksIntoState(ctx context.Context, start, end uin
 			l.Log.Warn("Failed to load block into state", "err", err)
 			return err
 		}
-		latestBlock = block
+		latestPayload = payload
 
 		if numBlocksLoaded := (i - start + 1); numBlocksLoaded%100 == 0 {
 			// Every 100 blocks, signal the publishing loop to publish.
@@ -307,7 +315,7 @@ func (l *BatchSubmitter) loadBlocksIntoState(ctx context.Context, start, end uin
 
 	}
 
-	l2ref, err := derive.L2BlockToBlockRef(l.RollupConfig, latestBlock)
+	l2ref, err := derive.PayloadToBlockRef(l.RollupConfig, latestPayload)
 	if err != nil {
 		l.Log.Warn("Invalid L2 block loaded into state", "err", err)
 		return err
@@ -317,9 +325,9 @@ func (l *BatchSubmitter) loadBlocksIntoState(ctx context.Context, start, end uin
 	return nil
 }
 
-// loadBlockIntoState fetches & stores a single block into `state`. It returns the block it loaded.
-func (l *BatchSubmitter) loadBlockIntoState(ctx context.Context, blockNumber uint64) (*types.Block, error) {
-	l2Client, err := l.EndpointProvider.EthClient(ctx)
+// loadBlockIntoState fetches & stores a single block into `state`. It returns the payload it loaded.
+func (l *BatchSubmitter) loadBlockIntoState(ctx context.Context, blockNumber uint64) (*eth.ExecutionPayload, error) {
+	l2Client, err := l.EndpointProvider.PayloadSource(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting L2 client: %w", err)
 	}
@@ -327,21 +335,20 @@ func (l *BatchSubmitter) loadBlockIntoState(ctx context.Context, blockNumber uin
 	cCtx, cancel := context.WithTimeout(ctx, l.Config.NetworkTimeout)
 	defer cancel()
 
-	block, err := l2Client.BlockByNumber(cCtx, new(big.Int).SetUint64(blockNumber))
+	envelope, err := l2Client.PayloadByNumber(cCtx, blockNumber)
 	if err != nil {
 		return nil, fmt.Errorf("getting L2 block: %w", err)
 	}
-
-	l.Log.Debug("Loaded L2 block", "size", block.Size())
+	payload := envelope.ExecutionPayload
 
 	l.channelMgrMutex.Lock()
 	defer l.channelMgrMutex.Unlock()
-	if err := l.channelMgr.AddL2Block(block); err != nil {
+	if err := l.channelMgr.AddL2Block(payload); err != nil {
 		return nil, fmt.Errorf("adding L2 block to state: %w", err)
 	}
 
-	l.Log.Info("Added L2 block to local state", "block", eth.ToBlockID(block), "tx_count", len(block.Transactions()), "time", block.Time())
-	return block, nil
+	l.Log.Info("Added L2 block to local state", "block", payload.ID(), "tx_count", len(payload.Transactions), "time", payload.Timestamp)
+	return payload, nil
 }
 
 func (l *BatchSubmitter) getSyncStatus(ctx context.Context) (*eth.SyncStatus, error) {
@@ -764,7 +771,7 @@ func (l *BatchSubmitter) waitNodeSync() error {
 		return fmt.Errorf("failed to retrieve l1 tip: %w", err)
 	}
 
-	l1TargetBlock := l1Tip.Number
+	l1TargetBlock := bigs.Uint64Strict(l1Tip.Number)
 	if l.Config.CheckRecentTxsDepth != 0 {
 		l.Log.Info("Checking for recently submitted batcher transactions on L1")
 		recentBlock, found, err := eth.CheckRecentTxs(cCtx, l.L1Client, l.Config.CheckRecentTxsDepth, l.Txmgr.From())
@@ -772,7 +779,7 @@ func (l *BatchSubmitter) waitNodeSync() error {
 			return fmt.Errorf("failed checking recent batcher txs: %w", err)
 		}
 		l.Log.Info("Checked for recently submitted batcher transactions on L1",
-			"l1_head", l1Tip, "l1_recent", recentBlock, "found", found)
+			"l1_head", eth.HeaderBlockID(l1Tip), "l1_recent", recentBlock, "found", found)
 		l1TargetBlock = recentBlock
 	}
 
@@ -859,13 +866,18 @@ func (l *BatchSubmitter) publishTxToL1(ctx context.Context, queue *txmgr.Queue[t
 		l.Log.Error("Failed to query L1 tip", "err", err)
 		return err
 	}
-	l.Metr.RecordLatestL1Block(l1tip)
+	l.Metr.RecordLatestL1Block(eth.InfoToL1BlockRef(eth.HeaderBlockInfo(l1tip)))
 
 	_, params := l.throttleController.Load()
 	// Collect next transaction data. This pulls data out of the channel, so we need to make sure
 	// to put it back if ever da or txmgr requests fail, by calling l.recordFailedDARequest/recordFailedTx.
+	//
+	// Price DA using the fork rules active at the fetched L1 tip rather than predicting the
+	// transaction's inclusion block. A transaction built on the final pre-Amsterdam head may use
+	// the pre-Amsterdam comparison even if it lands in the first Amsterdam block. This only affects
+	// DA selection; the transaction gas limit accounts for both floor schedules.
 	l.channelMgrMutex.Lock()
-	txdata, err := l.channelMgr.TxData(l1tip.ID(), params.IsThrottling(), pi)
+	txdata, err := l.channelMgr.TxData(l1tip, params.IsThrottling(), pi)
 	l.channelMgrMutex.Unlock()
 
 	if err == io.EOF {
@@ -922,13 +934,18 @@ func (l *BatchSubmitter) cancelBlockingTx(queue *txmgr.Queue[txRef], receiptsCh 
 }
 
 // publishToAltDAAndL1 posts the txdata to the DA Provider and then sends the commitment to L1.
-func (l *BatchSubmitter) publishToAltDAAndL1(txdata txData, queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef], daGroup *errgroup.Group) {
+// It returns an error, after starting the batcher's shutdown, if txdata violates a sanity check.
+func (l *BatchSubmitter) publishToAltDAAndL1(txdata txData, queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef], daGroup *errgroup.Group) error {
 	// sanity checks
 	if nf := len(txdata.frames); nf != 1 {
-		l.Log.Crit("Unexpected number of frames in calldata tx", "num_frames", nf)
+		err := fmt.Errorf("unexpected number of frames in calldata tx: %d", nf)
+		l.shutdownOnCriticalError(err)
+		return err
 	}
 	if txdata.asBlob {
-		l.Log.Crit("Unexpected blob txdata with AltDA enabled")
+		err := errors.New("unexpected blob txdata with AltDA enabled")
+		l.shutdownOnCriticalError(err)
+		return err
 	}
 
 	// when posting txdata to an external DA Provider, we use a goroutine to avoid blocking the main loop
@@ -963,6 +980,7 @@ func (l *BatchSubmitter) publishToAltDAAndL1(txdata txData, queue *txmgr.Queue[t
 		// return it for later processing. We use nil error to skip error logging.
 		l.recordFailedDARequest(txdata.ID(), nil)
 	}
+	return nil
 }
 
 // sendTransaction creates & queues for sending a transaction to the batch inbox address with the given `txData`.
@@ -973,9 +991,9 @@ func (l *BatchSubmitter) sendTransaction(txdata txData, queue *txmgr.Queue[txRef
 
 	// if Alt DA is enabled we post the txdata to the DA Provider and replace it with the commitment.
 	if l.Config.UseAltDA {
-		l.publishToAltDAAndL1(txdata, queue, receiptsCh, daGroup)
-		// we return nil to allow publishStateToL1 to keep processing the next txdata
-		return nil
+		// A nil error lets publishStateToL1 keep processing the next txdata while the
+		// DA request is in flight.
+		return l.publishToAltDAAndL1(txdata, queue, receiptsCh, daGroup)
 	}
 
 	var candidate *txmgr.TxCandidate
@@ -990,7 +1008,9 @@ func (l *BatchSubmitter) sendTransaction(txdata txData, queue *txmgr.Queue[txRef
 	} else {
 		// sanity check
 		if nf := len(txdata.frames); nf != 1 {
-			l.Log.Crit("Unexpected number of frames in calldata tx", "num_frames", nf)
+			err := fmt.Errorf("unexpected number of frames in calldata tx: %d", nf)
+			l.shutdownOnCriticalError(err)
+			return err
 		}
 		candidate = l.calldataTxCandidate(txdata.CallData())
 	}
@@ -1006,15 +1026,56 @@ type TxSender[T any] interface {
 // sendTx uses the txmgr queue to send the given transaction candidate after setting its
 // gaslimit. It will block if the txmgr queue has reached its MaxPendingTransactions limit.
 func (l *BatchSubmitter) sendTx(txdata txData, isCancel bool, candidate *txmgr.TxCandidate, queue TxSender[txRef], receiptsCh chan txmgr.TxReceipt[txRef]) {
-	floorDataGas, err := core.FloorDataGas(candidate.TxData)
+	gasLimitFn := maxFloorDataGas
+	if l.TxGasLimit != nil {
+		gasLimitFn = l.TxGasLimit
+	}
+	gasLimit, err := gasLimitFn(candidate.TxData)
 	if err != nil {
-		// We log instead of return an error here because the txmgr will do its own gas estimation.
-		l.Log.Warn("Failed to calculate floor data gas", "err", err)
+		// We log instead of returning an error here because the txmgr will do its own gas estimation.
+		l.Log.Warn("Failed to calculate batch transaction gas limit", "err", err)
 	} else {
-		candidate.GasLimit = floorDataGas
+		candidate.GasLimit = gasLimit
 	}
 
 	queue.Send(txRef{id: txdata.ID(), isCancel: isCancel, isBlob: txdata.asBlob}, *candidate, receiptsCh)
+}
+
+// TxGasLimitFn returns the gas limit of a batcher tx carrying txData. See
+// DriverSetup.TxGasLimit.
+type TxGasLimitFn func(txData []byte) (uint64, error)
+
+const (
+	amsterdamTxBaseGas               = uint64(12_000 + 3_000) // EIP-2780: TX_BASE_COST + COLD_ACCOUNT_ACCESS
+	amsterdamCalldataFloorGasPerByte = uint64(4 * 16)         // EIP-7976: 4 floor tokens per byte at 16 gas per token
+)
+
+// maxFloorDataGas returns a gas limit valid under both the pre-Amsterdam EIP-7623 rules and
+// Amsterdam's EIP-2780/EIP-7976 rules. The pre-Amsterdam floor also exceeds Amsterdam's regular
+// intrinsic gas whenever it exceeds the Amsterdam floor, so the larger floor is sufficient.
+func maxFloorDataGas(data []byte) (uint64, error) {
+	preAmsterdam, err := core.FloorDataGas(data)
+	if err != nil {
+		return 0, err
+	}
+	amsterdam, err := amsterdamFloorDataGas(data)
+	if err != nil {
+		return 0, err
+	}
+	return max(preAmsterdam, amsterdam), nil
+}
+
+// NOTE: we can probably replace this function with core.FloorDataGas once our geth dependency
+// includes the Amsterdam calculation.
+func amsterdamFloorDataGas(data []byte) (uint64, error) {
+	return addGas(amsterdamTxBaseGas, uint64(len(data)), amsterdamCalldataFloorGasPerByte)
+}
+
+func addGas(base, count, cost uint64) (uint64, error) {
+	if count > (math.MaxUint64-base)/cost {
+		return 0, core.ErrGasUintOverflow
+	}
+	return base + count*cost, nil
 }
 
 func (l *BatchSubmitter) blobTxCandidate(data txData) (*txmgr.TxCandidate, error) {
@@ -1075,16 +1136,16 @@ func (l *BatchSubmitter) recordConfirmedTx(id txID, receipt *types.Receipt) {
 	l.channelMgr.TxConfirmed(id, l1block)
 }
 
-// l1Tip gets the current L1 tip as a L1BlockRef. The passed context is assumed
-// to be a lifetime context, so it is internally wrapped with a network timeout.
-func (l *BatchSubmitter) l1Tip(ctx context.Context) (eth.L1BlockRef, error) {
+// l1Tip gets the current L1 tip header. The passed context is assumed to be a lifetime context,
+// so it is internally wrapped with a network timeout.
+func (l *BatchSubmitter) l1Tip(ctx context.Context) (*types.Header, error) {
 	tctx, cancel := context.WithTimeout(ctx, l.Config.NetworkTimeout)
 	defer cancel()
 	head, err := l.L1Client.HeaderByNumber(tctx, nil)
 	if err != nil {
-		return eth.L1BlockRef{}, fmt.Errorf("getting latest L1 block: %w", err)
+		return nil, fmt.Errorf("getting latest L1 block: %w", err)
 	}
-	return eth.InfoToL1BlockRef(eth.HeaderBlockInfo(head)), nil
+	return head, nil
 }
 
 func (l *BatchSubmitter) checkTxpool(queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef]) bool {

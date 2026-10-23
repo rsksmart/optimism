@@ -1,19 +1,20 @@
 package sysgo
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
-	"github.com/ethereum/go-ethereum/log"
 	gn "github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/geth"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testutils/tcpproxy"
 )
 
@@ -138,7 +139,48 @@ func (n *OpGeth) Stop() {
 		return
 	}
 	n.logger.Info("Closing op-geth", "name", n.name, "chain", n.l2Net.ChainID())
+	n.clearProxyUpstreams()
 	closeErr := n.l2Geth.Close()
 	n.logger.Info("Closed op-geth", "name", n.name, "chain", n.l2Net.ChainID(), "err", closeErr)
 	n.l2Geth = nil
+}
+
+// Callers must hold n.mu.
+func (n *OpGeth) clearProxyUpstreams() {
+	if n.userProxy != nil {
+		n.userProxy.ClearUpstream()
+	}
+	if n.authProxy != nil {
+		n.authProxy.ClearUpstream()
+	}
+}
+
+func (n *OpGeth) StartControlled(ctx context.Context) error {
+	return runControlStart(ctx, n.Running, n.Start)
+}
+
+func (n *OpGeth) StopControlled(ctx context.Context) error {
+	n.mu.Lock()
+	if n.l2Geth == nil {
+		n.mu.Unlock()
+		return nil
+	}
+	l2Geth := n.l2Geth
+	n.clearProxyUpstreams()
+	n.mu.Unlock()
+
+	err := l2Geth.Close()
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.l2Geth == l2Geth {
+		n.l2Geth = nil
+	}
+	return err
+}
+
+func (n *OpGeth) Running() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.l2Geth != nil
 }

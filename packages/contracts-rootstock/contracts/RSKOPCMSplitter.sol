@@ -5,28 +5,52 @@ pragma solidity 0.8.15;
 // RSKOPCMSplitter
 //
 // A thin one-shot helper contract that decomposes the upstream
-// OPContractsManagerV2 chain-management entry points (`deploy`, `upgrade`,
-// `migrate`) into multi-tx sequences each fitting under RSKj's RSKIP144 6.8M
-// per-tx sublist gas cap.
+// OPContractsManagerV2 initial deployment (`deploy`) into a multi-tx sequence
+// in which each transaction fits under RSKj's RSKIP144 6.8M per-tx sublist
+// gas cap. `upgrade` and `migrate` are not split yet (F1.1).
 //
 // Invariants vs upstream:
 //   * Inherits `OPContractsManagerUtilsCaller` to reuse the inherited
-//     `_loadOrDeployProxy`, `_upgrade`, `_makeGameArgs`, `_getGameImpl`,
-//     `_chainIdToBatchInboxAddress` helpers verbatim. The actual bodies of
-//     those helpers live in the deployed `OPContractsManagerUtils` contract
-//     and are reached via delegatecall — so the StorageSetter dance, the
-//     L1StandardBridge ChugSplash quirk, downgrade protection, version-tag
-//     checks, etc. all carry over exactly.
+//     `_loadOrDeployProxy`, `_upgrade`, `_makeGameArgs`, `_getGameImpl` and
+//     `_encodeSystemConfigInit` helpers verbatim. The actual bodies of most
+//     of those helpers live in the deployed `OPContractsManagerUtils`
+//     contract and are reached via delegatecall — so the StorageSetter
+//     dance, the L1StandardBridge ChugSplash quirk, downgrade protection,
+//     version-tag checks, etc. all carry over exactly.
 //   * `_loadChainContracts` and `_apply` are lifted line-for-line from
-//     `OPContractsManagerV2.sol` and split into stage methods. Each stage's
-//     body is a contiguous slice of upstream's straight-line code; nothing
-//     is reordered.
-//   * `_makeSystemConfigInitArgs` is the only `internal` helper on
-//     OPCMv2.sol that we couldn't inherit from the Utils tree, so it is
-//     duplicated verbatim (its only OPCM-specific reference is the Container
-//     address, which we expose locally).
-//   * `migrate(...)` is a verbatim delegatecall pass-through to the
-//     deployed `OPContractsManagerMigrator` contract.
+//     `OPContractsManagerV2.sol` (version 9.0.2, as `develop` ships it at
+//     op-node/v1.19.9; there is no op-contracts/v9 release tag) and split
+//     into stage methods. Each stage's body is a contiguous slice of
+//     upstream's straight-line code; nothing is reordered.
+//   * The constructor takes the deployed OPCMv2, requires it to be version
+//     9.0.2 (the release these stages port), and reads its utils and
+//     container from it, so the inherited helpers and the stages act on that
+//     release. Step 2 records that OPCMv2, not the splitter, as the chain's
+//     `lastUsedOPCM`, as upstream does, so a stock OPCMv2 can later upgrade
+//     the chain. Its upgrade input has to give PERMISSIONED_CANNON a non-zero
+//     bond: a stock OPCMv2 rejects the zero bond allowed below.
+//   * Every stage gets the same inputs. Upstream's `deploy` is one call, so
+//     `_apply` acts on the config it validated. Split into transactions,
+//     each stage takes its inputs from the caller again. Step 1a validates
+//     the config and pins `keccak256(abi.encode(_cfg))` and
+//     `keccak256(abi.encode(core))`; step 1b re-pins the contracts as
+//     `keccak256(abi.encode(cts))`. Every later stage must pass the same
+//     values. Without the pins, step 4b and step 5 would act on values step 2
+//     never validated. Validating in step 1a means a config step 2 would
+//     reject is refused before any proxy exists.
+//   * Two deliberate divergences in `_assertValidFullConfig`, both about
+//     PERMISSIONED_CANNON (the output-root permissioned game RSK deploys):
+//     - an initial deployment may enable it although OPCMv2 9.0.2
+//       hard-wires SUPER_ROOT_GAMES_MIGRATION on, which upstream reads as
+//       "initial deployments use super-root games only". RSK runs one L2
+//       per L1 with no interop, so a super-root game buys nothing and would
+//       make the proposer depend on a super-root RPC. With the flag on it
+//       is the only game an initial deployment may enable: the super-root
+//       games stay off, so one deployment never mixes the two families;
+//     - it may carry a zero init bond. Upstream requires a non-zero bond for
+//       every enabled game except SUPER_PERMISSIONED; on a permissioned game
+//       only the proposer can create games, so the bond is parked capital
+//       with no anti-spam value (PAYROLLUP-191).
 //
 // Each splitter instance is per-chain-operation: deploy it, run a session,
 // throw it away. The `sealed` flag makes that explicit at the contract
@@ -35,8 +59,7 @@ pragma solidity 0.8.15;
 // The `deployer` immutable is the operator EOA that constructed the
 // splitter; only that EOA may call into the stage methods. The splitter
 // itself owns the ProxyAdmin during the deploy session and transfers
-// ownership to `_cfg.proxyAdminOwner` at the very end of stage 5 (initial
-// deployments only — upgrades skip the terminal transfer).
+// ownership to `_cfg.proxyAdminOwner` at the very end of stage 5.
 // =============================================================================
 
 import { OPContractsManagerUtilsCaller } from "src/L1/opcm/OPContractsManagerUtilsCaller.sol";
@@ -64,9 +87,8 @@ import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
 import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
-import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
-import { IOPContractsManagerMigrator } from "interfaces/L1/opcm/IOPContractsManagerMigrator.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 
 contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     // -----------------------------------------------------------------------
@@ -125,6 +147,20 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         IOPContractsManagerUtils.ExtraInstruction[] extraInstructions;
     }
 
+    /// @notice Number of dispute game configs a full config must supply. Mirror of
+    ///         `OPContractsManagerV2.VALID_GAME_TYPE_COUNT`.
+    uint256 internal constant VALID_GAME_TYPE_COUNT = 6;
+
+    /// @notice The valid game types, packed low-to-high as six uint32s in the order the dispute
+    ///         game configs must be supplied: CANNON, PERMISSIONED_CANNON, CANNON_KONA,
+    ///         SUPER_PERMISSIONED, SUPER_CANNON_KONA, ZK_DISPUTE_GAME. Mirror of
+    ///         `OPContractsManagerV2.VALID_GAME_TYPES`.
+    uint256 internal constant VALID_GAME_TYPES = 0x0000000a_00000009_00000005_00000008_00000001_00000000;
+
+    /// @notice The OPCMv2 version whose `_loadChainContracts` and `_apply` the
+    ///         stages port. An upstream sync that changes it must re-port them.
+    string internal constant MIRRORED_OPCM_VERSION = "9.0.2";
+
     // -----------------------------------------------------------------------
     // Errors
     // -----------------------------------------------------------------------
@@ -135,10 +171,22 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     error RSKOPCMSplitter_InvalidGameConfigs();
     error RSKOPCMSplitter_SuperchainConfigNeedsUpgrade();
     error RSKOPCMSplitter_CannotUpgradeToCustomGasToken();
+    error RSKOPCMSplitter_InvalidEthLockbox();
+    error RSKOPCMSplitter_ZeroGameImplementation(GameType _gameType);
+    error RSKOPCMSplitter_InvalidUpgradeSequence(string _lastVersion, string _thisVersion);
+    error RSKOPCMSplitter_UnsupportedOPCMVersion(string _version);
+    error RSKOPCMSplitter_ConfigMismatch();
+    error RSKOPCMSplitter_ContractsMismatch();
 
     // -----------------------------------------------------------------------
     // Immutables
     // -----------------------------------------------------------------------
+
+    /// @notice The OPCMv2 this splitter mirrors. Step 2 records it in
+    ///         SystemConfig as the chain's last-used OPCM, as upstream records
+    ///         itself. The upgrade and migrate paths (F1.1) can read its
+    ///         validator and migrator from it.
+    IOPContractsManagerV2 public immutable opcmV2;
 
     /// @notice Container that holds the Implementations + Blueprints arrays.
     ///         Read-through from `blueprints()` / `implementations()`.
@@ -147,12 +195,6 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     /// @notice The operator EOA that constructed this splitter. Only this
     ///         account may drive the stage methods.
     address public immutable deployer;
-
-    /// @notice Standard validator + migrator addresses, mirrored from
-    ///         the OPCMv2 release. Only `migrator` is referenced post-
-    ///         construction (via `migrate`).
-    IOPContractsManagerStandardValidator public immutable opcmStandardValidator;
-    IOPContractsManagerMigrator public immutable opcmMigrator;
 
     // -----------------------------------------------------------------------
     // Per-session state
@@ -180,33 +222,35 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///      games) keeps both substages well under.
     uint8 public phase;
 
-    /// @notice True when the active session is an initial deployment (gates
-    ///         terminal ownership transfers in step5). False on upgrades.
+    /// @notice True once step 1a starts an initial deployment (gates the
+    ///         terminal ownership transfers in step5). Only the upgrade path
+    ///         (F1.1) would leave it false.
     bool public isInitialDeployment;
+
+    /// @notice keccak256 of the `FullConfig` passed to step 1a. Every later
+    ///         stage must pass the same config.
+    bytes32 public cfgHash;
+
+    /// @notice keccak256 of the contracts the next stage must get: the
+    ///         `ChainContractsCore` step 1a returned, then, from step 1b on,
+    ///         the `ChainContracts` step 1b returned.
+    bytes32 public ctsHash;
 
     // -----------------------------------------------------------------------
     // Construction
     // -----------------------------------------------------------------------
 
-    /// @param _utils    OPContractsManagerUtils — same instance the deployed
-    ///                  OPCMv2 references.
-    /// @param _container OPContractsManagerContainer — same instance the
-    ///                  deployed OPCMv2 references. Holds the shared
-    ///                  Implementations + Blueprints arrays.
-    /// @param _validator Standard validator (forwarded; not invoked here).
-    /// @param _migrator OPCMMigrator (delegatecalled by `migrate`).
-    constructor(
-        IOPContractsManagerUtils _utils,
-        IOPContractsManagerContainer _container,
-        IOPContractsManagerStandardValidator _validator,
-        IOPContractsManagerMigrator _migrator
-    )
-        OPContractsManagerUtilsCaller(_utils)
-    {
-        container = _container;
+    /// @param _opcmV2 The deployed OPCMv2, which must be `MIRRORED_OPCM_VERSION`.
+    ///                Its utils and container are read here, so the inherited
+    ///                helpers delegatecall into the same OPContractsManagerUtils
+    ///                and read the same Implementations + Blueprints as that
+    ///                OPCMv2.
+    constructor(IOPContractsManagerV2 _opcmV2) OPContractsManagerUtilsCaller(_opcmV2.opcmUtils()) {
+        string memory version = _opcmV2.version();
+        if (!SemverComp.eq(version, MIRRORED_OPCM_VERSION)) revert RSKOPCMSplitter_UnsupportedOPCMVersion(version);
+        opcmV2 = _opcmV2;
+        container = _opcmV2.contractsContainer();
         deployer = msg.sender;
-        opcmStandardValidator = _validator;
-        opcmMigrator = _migrator;
     }
 
     // -----------------------------------------------------------------------
@@ -253,21 +297,48 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         if (phase == 255) revert RSKOPCMSplitter_AlreadySealed();
     }
 
+    /// @dev Reverts unless `_cfg` is the config step 1a pinned.
+    function _checkConfig(FullConfig memory _cfg) internal view {
+        if (keccak256(abi.encode(_cfg)) != cfgHash) revert RSKOPCMSplitter_ConfigMismatch();
+    }
+
+    /// @dev Reverts unless `_encodedContracts` are the contracts the previous
+    ///      stage pinned.
+    function _checkContracts(bytes memory _encodedContracts) internal view {
+        if (keccak256(_encodedContracts) != ctsHash) revert RSKOPCMSplitter_ContractsMismatch();
+    }
+
+    /// @dev Reverts unless `_cfg` is the config step 1a pinned and `_cts` the
+    ///      contracts step 1b returned.
+    function _checkInputs(FullConfig memory _cfg, ChainContracts memory _cts) internal view {
+        _checkConfig(_cfg);
+        _checkContracts(abi.encode(_cts));
+    }
+
+    /// @dev Upstream lines 824-827: the SuperchainConfig must be at least as
+    ///      new as this release's implementation.
+    function _assertSuperchainConfigUpToDate(ISuperchainConfig _superchainConfig, address _impl) internal view {
+        if (SemverComp.lt(_superchainConfig.version(), ISuperchainConfig(_impl).version())) {
+            revert RSKOPCMSplitter_SuperchainConfigNeedsUpgrade();
+        }
+    }
+
     // =======================================================================
     // INITIAL DEPLOY — split version of OPCMv2.deploy(FullConfig)
     //
-    // Stages collectively reproduce OPCMv2.deploy() line-for-line:
+    // Stages collectively reproduce OPCMv2.deploy() line-for-line. Line
+    // numbers refer to OPContractsManagerV2.sol at op-node/v1.19.9:
     //   step1a = _loadChainContracts, ProxyAdmin..ETHLockbox proxies
-    //                                                 (upstream lines 370-444)
+    //                                                 (upstream lines 403-471)
     //   step1b = _loadChainContracts, LCDM..DelayedWETH proxies
-    //                                                 (upstream lines 466-534)
-    //   step2  = _apply, prelude + SystemConfig + Portal + ETHLockbox
-    //                                                 (lines 757-827)
-    //   step3  = _apply, interop migrate + LCDM + bridges + factory
-    //                                                 (lines 829-881)
-    //   step4a = _apply, DGF + DelayedWETH            (lines 883-897)
-    //   step4b = _apply, ASR + dispute games + CGT    (lines 899-947)
-    //   step5  = _apply, terminal ownership transfers (lines 949-962)
+    //                                                 (upstream lines 474-549)
+    //   step2  = _apply, prelude + SystemConfig + Portal + ETHLockbox +
+    //            liquidity migration                  (lines 818-904)
+    //   step3  = _apply, LCDM + bridges + factory     (lines 906-939)
+    //   step4a = _apply, DGF + DelayedWETH            (lines 941-955)
+    //   step4b = _apply, ASR + dispute games + SUPER_CANNON clear + CGT
+    //                                                 (lines 957-1018)
+    //   step5  = _apply, terminal ownership transfers (lines 1019-1032)
     //
     // Stages 1 and 4 are each split to keep every tx under RSKj's RSKIP144
     // 6.8M per-tx sublist gas cap; the unsplit forms land at ~7.6M and
@@ -278,14 +349,20 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     /// @notice Deploy stage 1a: deploy the *core* proxies (ProxyAdmin,
     ///         AddressManager, SystemConfig, OptimismPortal, ETHLockbox).
     ///         Mirror of `OPCMv2._loadChainContracts` upstream lines
-    ///         385-444 (initial-deployment branch).
+    ///         403-471 (initial-deployment branch).
     function deployStep1a_coreProxies(FullConfig memory _cfg)
         external
         onlyDeployer
         returns (ChainContractsCore memory core)
     {
         if (phase != 0) revert RSKOPCMSplitter_AlreadyStarted();
+
+        // Run step 2's checks before pinning: once pinned, a config step 2
+        // rejects could not be replaced and the proxies would be stranded.
+        _assertValidFullConfig(_cfg, true);
+        _assertSuperchainConfigUpToDate(_cfg.superchainConfig, implementations().superchainConfigImpl);
         isInitialDeployment = true;
+        cfgHash = keccak256(abi.encode(_cfg));
 
         // Mirror OPCMv2.deploy lines 207-220 (saltMixer + ALL-permit).
         string memory saltMixer = string(bytes.concat(bytes20(deployer), bytes(_cfg.saltMixer)));
@@ -297,6 +374,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         });
 
         core = _loadCoreProxies(_cfg.l2ChainId, saltMixer, instructions);
+        ctsHash = keccak256(abi.encode(core));
         phase = 1;
         return core;
     }
@@ -305,13 +383,15 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///         L1ERC721Bridge, L1StandardBridge, OptimismMintableERC20Factory,
     ///         DisputeGameFactory, AnchorStateRegistry, DelayedWETH).
     ///         Mirror of `OPCMv2._loadChainContracts` upstream lines
-    ///         466-534. Returns the combined `ChainContracts` struct.
+    ///         474-549. Returns the combined `ChainContracts` struct.
     function deployStep1b_remainingProxies(FullConfig memory _cfg, ChainContractsCore memory _core)
         external
         onlyDeployer
         returns (ChainContracts memory cts)
     {
         if (phase != 1) revert RSKOPCMSplitter_NotStarted();
+        _checkConfig(_cfg);
+        _checkContracts(abi.encode(_core));
 
         // Re-derive saltMixer + ALL-permit just like step1a, so the same
         // CREATE2 addresses computed during step1a continue to be honoured
@@ -325,6 +405,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         });
 
         cts = _loadRemainingProxies(_core, _cfg.l2ChainId, saltMixer, instructions);
+        ctsHash = keccak256(abi.encode(cts));
         phase = 2;
         return cts;
     }
@@ -336,99 +417,113 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     // contract (deployed from the same out-of-tree package) when the first
     // upgrade or migrate scenario is exercised on RSK. The existing splitter
     // logic for steps 2-5 is shared between both flows, so factoring out
-    // is a mechanical lift.
+    // is a mechanical lift. Its first stage must validate the config and set
+    // `cfgHash` and `ctsHash` too, or steps 2-5 revert.
     //
     // Tracked as F1.1 in RSK_COMPATIBILITY_BLOCKERS.md.
 
-    /// @notice Stage 2: SystemConfig + Portal + ETHLockbox. Mirror of
-    ///         `OPCMv2._apply` lines 757-827.
+    /// @notice Stage 2: SystemConfig + Portal + ETHLockbox + liquidity
+    ///         migration. Mirror of `OPCMv2._apply` lines 818-904.
     function step2_systemConfigAndPortal(FullConfig memory _cfg, ChainContracts memory _cts) external onlyDeployer {
         if (phase != 2) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
-        // Lines 757-758
+        // Lines 818-819. Step 1a already ran this check and the one at lines
+        // 824-827 on the pinned config; they stay for the upgrade path (F1.1).
         _assertValidFullConfig(_cfg, isInitialDeployment);
 
-        // Lines 760-761
+        // Lines 821-822
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
-        // Lines 763-766
-        if (SemverComp.lt(_cfg.superchainConfig.version(), ISuperchainConfig(impls.superchainConfigImpl).version())) {
-            revert RSKOPCMSplitter_SuperchainConfigNeedsUpgrade();
+        // Lines 824-827
+        _assertSuperchainConfigUpToDate(_cfg.superchainConfig, impls.superchainConfigImpl);
+
+        // Lines 829-836. Only upgrades run this check; until the upgrade path
+        // (F1.1) lands, `isInitialDeployment` is always true here.
+        if (!isInitialDeployment && !_isPermittedUpgradeSequence(_cts.systemConfig, address(opcmV2))) {
+            revert RSKOPCMSplitter_InvalidUpgradeSequence(_cts.systemConfig.lastUsedOPCMVersion(), opcmV2.version());
         }
 
-        // Lines 768-775 — upgrade-sequence check is skipped during initial
-        // deployment, mirroring upstream's `!_isInitialDeployment && ...`.
-        // For upgrades we replicate upstream's check via the standard validator
-        // contract reference (kept opt-in to avoid pulling its bytecode into
-        // this splitter — the actual check is in OPCMv2.isPermittedUpgradeSequence
-        // and is not RSK-specific). Defer until first real upgrade.
-
-        // Lines 777-782 — SystemConfig.
+        // Lines 838-865 — SystemConfig. `opcm` is `opcmV2`, as upstream, so
+        // `lastUsedOPCM` has a `version()` and a stock OPCMv2 can upgrade the
+        // chain (with a non-zero PERMISSIONED_CANNON bond, see the header).
         _upgrade(
-            _cts.proxyAdmin, address(_cts.systemConfig), impls.systemConfigImpl, _makeSystemConfigInitArgs(_cfg, _cts)
+            _cts.proxyAdmin,
+            address(_cts.systemConfig),
+            impls.systemConfigImpl,
+            _encodeSystemConfigInit(
+                SystemConfigInitArgs({
+                    owner: _cfg.systemConfigOwner,
+                    basefeeScalar: _cfg.basefeeScalar,
+                    blobbasefeeScalar: _cfg.blobBasefeeScalar,
+                    batcherHash: bytes32(uint256(uint160(_cfg.batcher))),
+                    gasLimit: _cfg.gasLimit,
+                    unsafeBlockSigner: _cfg.unsafeBlockSigner,
+                    resourceConfig: _cfg.resourceConfig,
+                    addrs: ISystemConfig.Addresses({
+                        l1CrossDomainMessenger: address(_cts.l1CrossDomainMessenger),
+                        l1ERC721Bridge: address(_cts.l1ERC721Bridge),
+                        l1StandardBridge: address(_cts.l1StandardBridge),
+                        optimismPortal: address(_cts.optimismPortal),
+                        optimismMintableERC20Factory: address(_cts.optimismMintableERC20Factory),
+                        delayedWETH: address(_cts.delayedWETH),
+                        opcm: address(opcmV2)
+                    }),
+                    l2ChainId: _cfg.l2ChainId,
+                    superchainConfig: _cfg.superchainConfig
+                })
+            )
         );
 
-        // Lines 784-811 — OptimismPortal (with interop branch).
-        if (isDevFeatureEnabled(DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
-            if (!_cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
-                _cts.systemConfig.setFeature(Features.ETH_LOCKBOX, true);
-            }
-            _upgrade(
-                _cts.proxyAdmin,
-                address(_cts.optimismPortal),
-                impls.optimismPortalImpl,
-                abi.encodeCall(
-                    IOptimismPortal.initialize, (_cts.systemConfig, _cts.anchorStateRegistry, _cts.ethLockbox)
-                )
-            );
-        } else {
-            _upgrade(
-                _cts.proxyAdmin,
-                address(_cts.optimismPortal),
-                impls.optimismPortalImpl,
-                abi.encodeCall(
-                    IOptimismPortal.initialize, (_cts.systemConfig, _cts.anchorStateRegistry, IETHLockbox(address(0)))
-                )
-            );
+        // Lines 867-878 — enable ETHLockbox before updating the portal.
+        bool wasEthLockboxEnabled = _cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX);
+        bool wasUsingEthLockbox = !isInitialDeployment && wasEthLockboxEnabled
+            && address(_cts.optimismPortal.ethLockbox()) != address(0);
+        if (address(_cts.ethLockbox) == address(0)) {
+            revert RSKOPCMSplitter_InvalidEthLockbox();
+        }
+        if (!wasEthLockboxEnabled) {
+            _cts.systemConfig.setFeature(Features.ETH_LOCKBOX, true);
         }
 
-        // Lines 816-827 — ETHLockbox (conditional).
-        if (isInitialDeployment || _cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
-            IOptimismPortal[] memory portals = new IOptimismPortal[](1);
-            portals[0] = _cts.optimismPortal;
-            _upgrade(
-                _cts.proxyAdmin,
-                address(_cts.ethLockbox),
-                impls.ethLockboxImpl,
-                abi.encodeCall(IETHLockbox.initialize, (_cts.systemConfig, portals))
-            );
+        // Lines 880-886 — OptimismPortal.
+        _upgrade(
+            _cts.proxyAdmin,
+            address(_cts.optimismPortal),
+            impls.optimismPortalImpl,
+            abi.encodeCall(IOptimismPortal.initialize, (_cts.systemConfig, _cts.anchorStateRegistry, _cts.ethLockbox))
+        );
+
+        // Lines 891-899 — ETHLockbox.
+        IOptimismPortal[] memory portals = new IOptimismPortal[](1);
+        portals[0] = _cts.optimismPortal;
+        _upgrade(
+            _cts.proxyAdmin,
+            address(_cts.ethLockbox),
+            impls.ethLockboxImpl,
+            abi.encodeCall(IETHLockbox.initialize, (_cts.systemConfig.superchainConfig(), portals))
+        );
+
+        // Lines 901-904 — custom gas token chains keep custody in the portal.
+        if (!wasUsingEthLockbox && !_cfg.useCustomGasToken) {
+            _cts.optimismPortal.migrateLiquidity();
         }
 
         phase = 3;
     }
 
-    /// @notice Stage 3: interop liquidity migration + LCDM + bridges +
-    ///         OptimismMintableERC20Factory. Mirror of `OPCMv2._apply` lines 829-881.
-    function step3_messengerAndBridges(FullConfig memory /* _cfg */, ChainContracts memory _cts)
+    /// @notice Stage 3: LCDM + bridges + OptimismMintableERC20Factory. Mirror
+    ///         of `OPCMv2._apply` lines 906-939.
+    function step3_messengerAndBridges(FullConfig memory _cfg, ChainContracts memory _cts)
         external
         onlyDeployer
     {
         if (phase != 3) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
-        // Lines 829-846 — interop liquidity migration (conditional).
-        if (isDevFeatureEnabled(DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
-            if (!_cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
-                _cts.systemConfig.setFeature(Features.ETH_LOCKBOX, true);
-            }
-            if (!_cts.systemConfig.isFeatureEnabled(Features.INTEROP)) {
-                _cts.systemConfig.setFeature(Features.INTEROP, true);
-            }
-            IOptimismPortal(payable(_cts.optimismPortal)).migrateLiquidity();
-        }
-
-        // Lines 848-857 — L1CrossDomainMessenger (slot 0, offset 20).
+        // Lines 906-915 — L1CrossDomainMessenger (slot 0, offset 20).
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.l1CrossDomainMessenger),
@@ -438,7 +533,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             20
         );
 
-        // Lines 859-865 — L1StandardBridge.
+        // Lines 917-923 — L1StandardBridge.
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.l1StandardBridge),
@@ -446,7 +541,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             abi.encodeCall(IL1StandardBridge.initialize, (_cts.l1CrossDomainMessenger, _cts.systemConfig))
         );
 
-        // Lines 867-873 — L1ERC721Bridge.
+        // Lines 925-931 — L1ERC721Bridge.
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.l1ERC721Bridge),
@@ -454,7 +549,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             abi.encodeCall(IL1ERC721Bridge.initialize, (_cts.l1CrossDomainMessenger, _cts.systemConfig))
         );
 
-        // Lines 875-881 — OptimismMintableERC20Factory.
+        // Lines 933-939 — OptimismMintableERC20Factory.
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.optimismMintableERC20Factory),
@@ -466,16 +561,17 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     }
 
     /// @notice Stage 4a: DisputeGameFactory + DelayedWETH. Mirror of
-    ///         `OPCMv2._apply` lines 883-897 — first half of stage 4.
-    function step4a_disputeFactoryAndWeth(FullConfig memory /* _cfg */, ChainContracts memory _cts)
+    ///         `OPCMv2._apply` lines 941-955 — first half of stage 4.
+    function step4a_disputeFactoryAndWeth(FullConfig memory _cfg, ChainContracts memory _cts)
         external
         onlyDeployer
     {
         if (phase != 4) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
-        // Lines 883-889 — DisputeGameFactory.
+        // Lines 941-947 — DisputeGameFactory.
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.disputeGameFactory),
@@ -483,43 +579,47 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             abi.encodeCall(IDisputeGameFactory.initialize, (address(this)))
         );
 
-        // Lines 891-897 — DelayedWETH.
+        // Lines 949-955 — DelayedWETH.
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.delayedWETH),
             impls.delayedWETHImpl,
-            abi.encodeCall(IDelayedWETH.initialize, (_cts.systemConfig))
+            abi.encodeCall(IDelayedWETH.initialize, (_cts.ethLockbox))
         );
 
         phase = 5;
     }
 
     /// @notice Stage 4b: AnchorStateRegistry + dispute-game config loop +
-    ///         custom gas token branch. Mirror of `OPCMv2._apply` lines
-    ///         899-947 — second half of stage 4.
+    ///         SUPER_CANNON clear + custom gas token branch. Mirror of
+    ///         `OPCMv2._apply` lines 957-1018 — second half of stage 4.
     function step4b_anchorAndGames(FullConfig memory _cfg, ChainContracts memory _cts) external onlyDeployer {
         if (phase != 5) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
         IOPContractsManagerContainer.Implementations memory impls = implementations();
 
-        // Lines 899-908 — AnchorStateRegistry.
+        // Lines 957-966 — AnchorStateRegistry.
         _upgrade(
             _cts.proxyAdmin,
             address(_cts.anchorStateRegistry),
             impls.anchorStateRegistryImpl,
             abi.encodeCall(
                 IAnchorStateRegistry.initialize,
-                (_cts.systemConfig, _cts.disputeGameFactory, _cfg.startingAnchorRoot, _cfg.startingRespectedGameType)
+                (_cts.ethLockbox, _cts.disputeGameFactory, _cfg.startingAnchorRoot, _cfg.startingRespectedGameType)
             )
         );
 
-        // Lines 910-934 — dispute games loop.
+        // Lines 968-995 — dispute games loop.
         for (uint256 i = 0; i < _cfg.disputeGameConfigs.length; i++) {
             IDisputeGame gameImpl = IDisputeGame(address(0));
             bytes memory gameArgs = bytes("");
 
             if (_cfg.disputeGameConfigs[i].enabled) {
                 gameImpl = _getGameImpl(_cfg.disputeGameConfigs[i].gameType);
+                if (address(gameImpl) == address(0) || address(gameImpl).code.length == 0) {
+                    revert RSKOPCMSplitter_ZeroGameImplementation(_cfg.disputeGameConfigs[i].gameType);
+                }
                 gameArgs = _makeGameArgs(
                     _cfg.l2ChainId, _cts.anchorStateRegistry, _cts.delayedWETH, _cfg.disputeGameConfigs[i]
                 );
@@ -531,7 +631,12 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             );
         }
 
-        // Lines 936-947 — custom gas token (conditional, initial-deploy only).
+        // Lines 997-1005 — SUPER_CANNON is retired from the allow-list; clear
+        // it unconditionally (a no-op state-wise on initial deployment).
+        _cts.disputeGameFactory.setImplementation(GameTypes.SUPER_CANNON, IDisputeGame(address(0)), hex"");
+        _cts.disputeGameFactory.setInitBond(GameTypes.SUPER_CANNON, 0);
+
+        // Lines 1006-1018 — custom gas token (conditional, initial-deploy only).
         if (_cfg.useCustomGasToken && !_cts.systemConfig.isCustomGasToken()) {
             if (!isInitialDeployment) {
                 revert RSKOPCMSplitter_CannotUpgradeToCustomGasToken();
@@ -543,11 +648,12 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     }
 
     /// @notice Stage 5: terminal ownership transfers (initial deploy only).
-    ///         Mirror of `OPCMv2._apply` lines 949-962. Seals the splitter.
+    ///         Mirror of `OPCMv2._apply` lines 1019-1032. Seals the splitter.
     function step5_finalize(FullConfig memory _cfg, ChainContracts memory _cts) external onlyDeployer {
         if (phase != 6) revert RSKOPCMSplitter_NotStarted();
+        _checkInputs(_cfg, _cts);
 
-        // Lines 949-962. On upgrade we skip the terminal transfers entirely
+        // Lines 1019-1032. On upgrade we skip the terminal transfers entirely
         // (matches upstream's `if (_isInitialDeployment) { ... }`).
         if (isInitialDeployment) {
             _cts.disputeGameFactory.transferOwnership(_cfg.proxyAdminOwner);
@@ -559,14 +665,14 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
 
     // =======================================================================
     // MIGRATE — moved to RSKOPCMSplitterUpgrade (see note above stage 2). The
-    // migrator immutable is still wired through the constructor so the future
-    // sibling contract can read it from a deployed splitter if needed.
+    // future sibling contract can read the migrator through
+    // `opcmV2().opcmMigrator()`.
     // =======================================================================
 
     // =======================================================================
-    // PRIVATE HELPERS — only `_loadProxies`, `_loadFullConfigForUpgrade`,
-    // `_assertValidFullConfig`, and `_makeSystemConfigInitArgs` need to be
-    // local. Everything else (`_upgrade`, `_loadOrDeployProxy`, etc.) is
+    // PRIVATE HELPERS — only `_loadProxies`, `_loadFullConfigForUpgrade` and
+    // `_assertValidFullConfig` need to be local. Everything else
+    // (`_upgrade`, `_loadOrDeployProxy`, `_encodeSystemConfigInit`, etc.) is
     // inherited from OPContractsManagerUtilsCaller.
     // =======================================================================
 
@@ -694,7 +800,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     /// @dev Initial-deploy proxy loader, first half. Deploys ProxyAdmin,
     ///      AddressManager, SystemConfig proxy, OptimismPortal proxy, and
     ///      ETHLockbox proxy. Mirror of `OPCMv2._loadChainContracts` upstream
-    ///      lines 385-444 (initial-deployment branch).
+    ///      lines 403-471 (initial-deployment branch).
     function _loadCoreProxies(
         uint256 _l2ChainId,
         string memory _saltMixer,
@@ -745,9 +851,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
             )
         );
 
-        // Initial deployment always deploys ETHLockbox (matches upstream's
-        // `_isInitialDeployment || systemConfig.isFeatureEnabled(...)`
-        // branch with `_isInitialDeployment = true`).
+        // Lines 463-471 — load or deploy the ETHLockbox.
         IETHLockbox ethLockbox = IETHLockbox(
             _loadOrDeployProxy(
                 address(optimismPortal),
@@ -771,7 +875,7 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     ///      L1CrossDomainMessenger, L1ERC721Bridge, L1StandardBridge,
     ///      OptimismMintableERC20Factory, DisputeGameFactory,
     ///      AnchorStateRegistry, DelayedWETH proxies. Mirror of
-    ///      `OPCMv2._loadChainContracts` upstream lines 466-534.
+    ///      `OPCMv2._loadChainContracts` upstream lines 474-549.
     function _loadRemainingProxies(
         ChainContractsCore memory _core,
         uint256 _l2ChainId,
@@ -990,31 +1094,104 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
     }
     */
 
-    /// @dev Verbatim port of `OPCMv2._assertValidFullConfig` (lines 688-742).
-    function _assertValidFullConfig(FullConfig memory _cfg, bool _isInitialDeployment) internal pure {
-        GameType[] memory validGameTypes = new GameType[](6);
-        validGameTypes[0] = GameTypes.CANNON;
-        validGameTypes[1] = GameTypes.PERMISSIONED_CANNON;
-        validGameTypes[2] = GameTypes.CANNON_KONA;
-        validGameTypes[3] = GameTypes.SUPER_CANNON;
-        validGameTypes[4] = GameTypes.SUPER_PERMISSIONED_CANNON;
-        validGameTypes[5] = GameTypes.SUPER_CANNON_KONA;
-
-        if (_cfg.disputeGameConfigs.length != validGameTypes.length) {
+    /// @dev Port of `OPCMv2._assertValidFullConfig` (upstream lines 691-803).
+    ///      Two RSK divergences, both marked inline and both about
+    ///      PERMISSIONED_CANNON: it is valid in an initial deployment despite the
+    ///      super-root flag, in place of the super-root games, and it may carry
+    ///      a zero init bond (PAYROLLUP-191).
+    function _assertValidFullConfig(FullConfig memory _cfg, bool _isInitialDeployment) internal view {
+        if (_cfg.disputeGameConfigs.length != VALID_GAME_TYPE_COUNT) {
             revert RSKOPCMSplitter_InvalidGameConfigs();
         }
 
+        // An initial anchor must have a nonzero root and leave room for a uint64 successor.
+        if (
+            _isInitialDeployment
+                && (
+                    _cfg.startingAnchorRoot.root.raw() == bytes32(0)
+                        || _cfg.startingAnchorRoot.l2SequenceNumber >= type(uint64).max
+                )
+        ) {
+            revert RSKOPCMSplitter_InvalidGameConfigs();
+        }
+
+        bool superRootGamesMigrationEnabled = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
         for (uint256 i = 0; i < _cfg.disputeGameConfigs.length; i++) {
-            if (_cfg.disputeGameConfigs[i].gameType.raw() != validGameTypes[i].raw()) {
+            uint32 rawGameType = uint32(VALID_GAME_TYPES >> (i * 32));
+            bool isCannonGame = rawGameType == GameTypes.CANNON.raw();
+            bool isPermissionedCannonGame = rawGameType == GameTypes.PERMISSIONED_CANNON.raw();
+            bool isCannonKonaGame = rawGameType == GameTypes.CANNON_KONA.raw();
+            bool isSuperPermissionedGame = rawGameType == GameTypes.SUPER_PERMISSIONED.raw();
+            bool isSuperCannonKonaGame = rawGameType == GameTypes.SUPER_CANNON_KONA.raw();
+            bool isZkDisputeGame = rawGameType == GameTypes.ZK_DISPUTE_GAME.raw();
+
+            if (_cfg.disputeGameConfigs[i].gameType.raw() != rawGameType) {
                 revert RSKOPCMSplitter_InvalidGameConfigs();
             }
+
             if (!_cfg.disputeGameConfigs[i].enabled && _cfg.disputeGameConfigs[i].initBond != 0) {
                 revert RSKOPCMSplitter_InvalidGameConfigs();
             }
-            bool isPermissioned = validGameTypes[i].raw() == GameTypes.PERMISSIONED_CANNON.raw()
-                || validGameTypes[i].raw() == GameTypes.SUPER_PERMISSIONED_CANNON.raw();
-            if (_isInitialDeployment && !isPermissioned && _cfg.disputeGameConfigs[i].enabled) {
+
+            if (isSuperPermissionedGame && _cfg.disputeGameConfigs[i].initBond != 0) {
                 revert RSKOPCMSplitter_InvalidGameConfigs();
+            }
+
+            // An enabled game needs a non-zero init bond. Upstream exempts only
+            // SUPER_PERMISSIONED. RSK divergence: PERMISSIONED_CANNON is exempt too,
+            // because only the proposer can create those games and the bond would
+            // only park its capital (PAYROLLUP-191).
+            if (
+                !isSuperPermissionedGame && !isPermissionedCannonGame && _cfg.disputeGameConfigs[i].enabled
+                    && _cfg.disputeGameConfigs[i].initBond == 0
+            ) {
+                revert RSKOPCMSplitter_InvalidGameConfigs();
+            }
+
+            // RSK divergence: upstream lets an initial deployment enable only the
+            // super-root games while SUPER_ROOT_GAMES_MIGRATION is on, and OPCMv2
+            // 9.0.2 hard-wires that flag on (DevFeatures). RSK runs one L2 per L1
+            // with no interop, so it keeps deploying PERMISSIONED_CANNON, the
+            // output-root game OptimismPortal2 still proves withdrawals against.
+            // With the flag on that is the only valid game: the super-root games
+            // are not, so a deployment never mixes the two families. The
+            // CANNON_KONA arm keeps upstream's flag-off case and stays
+            // unreachable until upstream stops hard-wiring the flag.
+            bool validForInitialDeploy =
+                isPermissionedCannonGame || (!superRootGamesMigrationEnabled && isCannonKonaGame);
+            if (_isInitialDeployment && _cfg.disputeGameConfigs[i].enabled && !validForInitialDeploy) {
+                revert RSKOPCMSplitter_InvalidGameConfigs();
+            }
+
+            if (
+                isZkDisputeGame && _cfg.disputeGameConfigs[i].enabled
+                    && !isDevFeatureEnabled(DevFeatures.ZK_DISPUTE_GAME)
+            ) {
+                revert RSKOPCMSplitter_InvalidGameConfigs();
+            }
+
+            if (_cfg.disputeGameConfigs[i].enabled && (isCannonGame || isCannonKonaGame || isSuperCannonKonaGame)) {
+                if (
+                    _isInitialDeployment
+                        && _cfg.startingAnchorRoot.root.raw() == Constants.PLACEHOLDER_STARTING_ANCHOR_ROOT
+                ) {
+                    revert RSKOPCMSplitter_InvalidGameConfigs();
+                }
+
+                IOPContractsManagerUtils.FaultDisputeGameConfig memory faultGameConfig =
+                    abi.decode(_cfg.disputeGameConfigs[i].gameArgs, (IOPContractsManagerUtils.FaultDisputeGameConfig));
+                if (faultGameConfig.absolutePrestate.raw() == bytes32(0)) {
+                    revert RSKOPCMSplitter_InvalidGameConfigs();
+                }
+            }
+
+            if (_cfg.disputeGameConfigs[i].enabled && isZkDisputeGame) {
+                IOPContractsManagerUtils.ZKDisputeGameConfig memory zkGameConfig =
+                    abi.decode(_cfg.disputeGameConfigs[i].gameArgs, (IOPContractsManagerUtils.ZKDisputeGameConfig));
+                if (zkGameConfig.absolutePrestate.raw() == bytes32(0)) {
+                    revert RSKOPCMSplitter_InvalidGameConfigs();
+                }
             }
         }
 
@@ -1031,48 +1208,5 @@ contract RSKOPCMSplitter is OPContractsManagerUtilsCaller {
         if (!startingGameTypeFound) {
             revert RSKOPCMSplitter_InvalidGameConfigs();
         }
-    }
-
-    /// @dev Verbatim port of `OPCMv2._makeSystemConfigInitArgs` (lines 973-1009).
-    ///      The only OPCMv2-private field used is `opcmV2` (passed into the
-    ///      SystemConfig.Addresses struct as `opcm`). Since RSK chains are
-    ///      deployed by the splitter rather than by an OPCMv2 instance, we
-    ///      bind `opcm` to the splitter's address — the SystemConfig stores
-    ///      it as the "OPCM that last managed me", which is structurally
-    ///      true here.
-    function _makeSystemConfigInitArgs(
-        FullConfig memory _cfg,
-        ChainContracts memory _cts
-    )
-        internal
-        view
-        returns (bytes memory)
-    {
-        ISystemConfig.Addresses memory addrs = ISystemConfig.Addresses({
-            l1CrossDomainMessenger: address(_cts.l1CrossDomainMessenger),
-            l1ERC721Bridge: address(_cts.l1ERC721Bridge),
-            l1StandardBridge: address(_cts.l1StandardBridge),
-            optimismPortal: address(_cts.optimismPortal),
-            optimismMintableERC20Factory: address(_cts.optimismMintableERC20Factory),
-            delayedWETH: address(_cts.delayedWETH),
-            opcm: address(this)
-        });
-
-        return abi.encodeCall(
-            ISystemConfig.initialize,
-            (
-                _cfg.systemConfigOwner,
-                _cfg.basefeeScalar,
-                _cfg.blobBasefeeScalar,
-                bytes32(uint256(uint160(_cfg.batcher))),
-                _cfg.gasLimit,
-                _cfg.unsafeBlockSigner,
-                _cfg.resourceConfig,
-                _chainIdToBatchInboxAddress(_cfg.l2ChainId),
-                addrs,
-                _cfg.l2ChainId,
-                _cfg.superchainConfig
-            )
-        );
     }
 }

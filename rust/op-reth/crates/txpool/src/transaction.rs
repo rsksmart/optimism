@@ -54,13 +54,20 @@ pub struct OpPooledTransaction<
 
     /// Cached EIP-2718 encoded bytes of the transaction, lazily computed.
     encoded_2718: OnceLock<Bytes>,
+
+    /// Worst-case cost including the OP fees reserved at validation, see
+    /// [`OpPooledTx::set_op_fee_reservation`].
+    op_cost: U256,
 }
 
 impl<Cons: SignedTransaction, Pooled> OpPooledTransaction<Cons, Pooled> {
     /// Create new instance of [Self].
     pub fn new(transaction: Recovered<Cons>, encoded_length: usize) -> Self {
+        let inner = EthPooledTransaction::new(transaction, encoded_length);
+        let op_cost = inner.cost;
         Self {
-            inner: EthPooledTransaction::new(transaction, encoded_length),
+            inner,
+            op_cost,
             estimated_tx_compressed_size: Default::default(),
             conditional: None,
             interop: Arc::new(AtomicU64::new(NO_INTEROP_TX)),
@@ -165,7 +172,7 @@ where
     }
 
     fn cost(&self) -> &U256 {
-        &self.inner.cost
+        &self.op_cost
     }
 
     fn encoded_length(&self) -> usize {
@@ -292,13 +299,20 @@ where
     }
 }
 
-/// Helper trait to provide payload builder with access to conditionals and encoded bytes of
-/// transaction.
+/// OP-specific pool transaction behaviour: gives the payload builder access to conditionals and
+/// encoded bytes, and lets the validator reserve the OP fees in [`PoolTransaction::cost`].
 pub trait OpPooledTx:
     MaybeConditionalTransaction + MaybeInteropTransaction + PoolTransaction + DataAvailabilitySized
 {
     /// Returns the EIP-2718 encoded bytes of the transaction.
     fn encoded_2718(&self) -> Cow<'_, Bytes>;
+
+    /// Adds the OP fees the sender must also cover (L1 data fee and operator fee) to
+    /// [`PoolTransaction::cost`], replacing any previous reservation.
+    ///
+    /// The pool sums `cost()` over a sender's consecutive nonces to decide which are executable, so
+    /// without the reservation it marks transactions pending that cannot pay their L1 data fee.
+    fn set_op_fee_reservation(&mut self, fee: U256);
 }
 
 impl<Cons, Pooled> OpPooledTx for OpPooledTransaction<Cons, Pooled>
@@ -309,6 +323,10 @@ where
 {
     fn encoded_2718(&self) -> Cow<'_, Bytes> {
         Cow::Borrowed(self.encoded_2718())
+    }
+
+    fn set_op_fee_reservation(&mut self, fee: U256) {
+        self.op_cost = self.inner.cost.saturating_add(fee);
     }
 }
 
@@ -325,7 +343,7 @@ mod tests {
     use reth_provider::test_utils::MockEthProvider;
     use reth_transaction_pool::{
         TransactionOrigin, TransactionValidationOutcome, blobstore::InMemoryBlobStore,
-        validate::EthTransactionValidatorBuilder,
+        error::InvalidPoolTransactionError, validate::EthTransactionValidatorBuilder,
     };
     #[tokio::test]
     async fn validate_optimism_transaction() {
@@ -362,5 +380,67 @@ mod tests {
             _ => panic!("Expected invalid transaction"),
         };
         assert_eq!(err.to_string(), "transaction type not supported");
+    }
+
+    /// A non-deposit transaction may use at most `block_gas_limit - L1_INFO_GAS_OVERHEAD` gas:
+    /// the L1-info deposit is present in every block and always consumes gas, so a tx asking for
+    /// the full block gas limit can never be included. Mirrors op-geth's `EffectiveGasLimit`
+    /// (`core/txpool/validation.go`); such a tx must be rejected at admission, not silently stuck.
+    #[tokio::test]
+    async fn rejects_tx_exceeding_l1_info_reserved_gas_limit() {
+        use crate::validator::L1_INFO_GAS_OVERHEAD;
+        use alloy_consensus::{SignableTransaction, TxEip1559};
+        use alloy_primitives::{Address, Signature};
+        use reth_provider::test_utils::ExtendedAccount;
+
+        let client = MockEthProvider::<OpPrimitives>::new()
+            .with_chain_spec(OP_MAINNET.clone())
+            .with_genesis_block();
+        let signer = Address::with_last_byte(1);
+        client.add_account(signer, ExtendedAccount::new(0, U256::MAX));
+
+        let evm_config = OpEvmConfig::optimism(OP_MAINNET.clone());
+        let validator = EthTransactionValidatorBuilder::new(client, evm_config)
+            .build(InMemoryBlobStore::default());
+        let validator = OpTransactionValidator::new(validator);
+
+        let block_gas_limit = validator.block_gas_limit();
+        let effective_limit = block_gas_limit - L1_INFO_GAS_OVERHEAD;
+
+        let make_tx = |gas_limit: u64| -> OpPooledTransaction {
+            let tx: OpTransactionSigned = TxEip1559 {
+                chain_id: 10,
+                nonce: 0,
+                gas_limit,
+                max_fee_per_gas: 1_000_000_000,
+                to: TxKind::Call(Address::with_last_byte(0x42)),
+                ..Default::default()
+            }
+            .into_signed(Signature::test_signature())
+            .into();
+            let recovered = Recovered::new_unchecked(tx, signer);
+            let len = recovered.encode_2718_len();
+            OpPooledTransaction::new(recovered, len)
+        };
+
+        // At the full block gas limit: <= the inner full-limit check (so it alone wouldn't
+        // reject), but above the L1-info-reserved limit => rejected by the reservation.
+        let outcome =
+            validator.validate_one(TransactionOrigin::External, make_tx(block_gas_limit)).await;
+        assert!(
+            matches!(
+                outcome,
+                TransactionValidationOutcome::Invalid(
+                    _,
+                    InvalidPoolTransactionError::ExceedsGasLimit(..)
+                )
+            ),
+            "tx at the full block gas limit must be rejected by the L1-info reservation, got: {outcome:?}"
+        );
+
+        // At the effective limit => accepted.
+        let outcome =
+            validator.validate_one(TransactionOrigin::External, make_tx(effective_limit)).await;
+        assert!(outcome.is_valid(), "tx at the effective limit must be accepted, got: {outcome:?}");
     }
 }

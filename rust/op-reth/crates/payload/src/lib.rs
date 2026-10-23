@@ -12,10 +12,12 @@
 extern crate alloc;
 
 pub mod builder;
-pub use builder::OpPayloadBuilder;
+pub use builder::{
+    CommittedTxGas, OpPayloadBuilder, PayloadTransactionsWithCommitHook, RethPayloadTransactions,
+};
 pub mod error;
 pub mod payload;
-use op_alloy_rpc_types_engine::OpExecutionData;
+use op_alloy_rpc_types_engine::{OpExecutionData, OpExecutionPayloadEnvelope};
 pub use payload::{
     OpBuiltPayload, OpExecData, OpPayloadAttributes, OpPayloadAttrs, OpPayloadBuilderAttributes,
     payload_id_optimism,
@@ -23,12 +25,13 @@ pub use payload::{
 mod traits;
 use reth_optimism_primitives::OpPrimitives;
 use reth_payload_primitives::{BuiltPayload, PayloadTypes};
-use reth_primitives_traits::{Block, NodePrimitives, SealedBlock};
+use reth_primitives_traits::{Block, NodePrimitives, SealedBlock, SignedTransaction};
 pub use traits::*;
 pub mod validator;
 pub use validator::OpExecutionPayloadValidator;
 
 pub mod config;
+mod sdm_metrics;
 
 // Implement `ConfigureEngineEvm<OpExecData>` by delegating to the `OpExecutionData` implementation.
 // This must live here because `OpExecData` is defined in this crate (orphan rules).
@@ -68,22 +71,36 @@ where
 #[non_exhaustive]
 pub struct OpPayloadTypes<N: NodePrimitives = OpPrimitives>(core::marker::PhantomData<N>);
 
-impl<N: NodePrimitives> PayloadTypes for OpPayloadTypes<N>
+impl<T, N> PayloadTypes for OpPayloadTypes<N>
 where
+    T: SignedTransaction,
+    N: NodePrimitives<Block = alloy_consensus::Block<T>>,
     OpBuiltPayload<N>: BuiltPayload,
 {
     type ExecutionData = crate::payload::OpExecData;
     type BuiltPayload = OpBuiltPayload<N>;
     type PayloadAttributes = crate::payload::OpPayloadAttrs;
 
+    // `block_to_payload` and `From<OpBuiltPayload<N>> for OpExecData` are
+    // separate conversion paths to the same type. OP execution data does not
+    // currently carry a BAL, so both paths intentionally discard it.
+    /// UPSTREAM-MIRROR(copy): reth@rev:0fbe428
+    /// `reth_ethereum_engine_primitives::EthPayloadTypes::block_to_payload`
+    ///
+    /// Mirrors the upstream conversion while constructing OP execution data.
+    /// Re-check this path when upstream changes or OP execution data gains BAL support.
     fn block_to_payload(
         block: SealedBlock<
             <<Self::BuiltPayload as BuiltPayload>::Primitives as NodePrimitives>::Block,
         >,
+        _bal: Option<alloy_primitives::Bytes>,
     ) -> Self::ExecutionData {
-        crate::payload::OpExecData::from(OpExecutionData::from_block_unchecked(
-            block.hash(),
-            &block.into_block().into_ethereum_block(),
+        crate::payload::OpExecData::from(OpExecutionData::from(
+            OpExecutionPayloadEnvelope::from_block_unchecked(
+                block.hash(),
+                &block.into_block().into_ethereum_block(),
+            )
+            .expect("built OP blocks must normalize"),
         ))
     }
 }

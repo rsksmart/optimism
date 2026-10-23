@@ -82,8 +82,8 @@ extract the addresses you need to feed into the next step.
 
 | # | Script | Package | Tx count | Output |
 |---|---|---|---|---|
-| 1 | `DeploySuperchain.run` | contracts-bedrock | ~5 | SuperchainConfig, ProtocolVersions, SuperchainProxyAdmin |
-| 2 | `DeployImplementations.runWithBytes` | contracts-bedrock | ~16 | All impls + `OPCMv2` |
+| 1 | `DeploySuperchain.run` | contracts-bedrock | 5 | SuperchainConfig, SuperchainProxyAdmin |
+| 2 | `DeployImplementations.runWithBytes` | contracts-bedrock | 29 | All impls + `OPCMv2` |
 | 3 | `RSKDeployOPChain.runSplit` | contracts-rootstock (this) | **8** | All proxies + dispute games |
 | 4 | `L2GenesisDump.runWithDump` (you write a wrapper) | contracts-bedrock | 0 (off-chain) | `l2-allocs.json` |
 
@@ -170,17 +170,12 @@ Skip this section on testnet/mainnet — it's already there.
 ```solidity
 struct Input {
     address guardian;
-    address protocolVersionsOwner;
     address superchainProxyAdminOwner;
     bool    paused;
-    bytes32 recommendedProtocolVersion;
-    bytes32 requiredProtocolVersion;
 }
 ```
 
-For a single-operator regtest, set all three role addresses to your EOA.
-Both protocol-version fields can be the version-9.0.0 sentinel
-`0x0000…0009000000000000000000000000`.
+For a single-operator regtest, set both role addresses to your EOA.
 
 Run from `optimism/packages/contracts-bedrock`:
 
@@ -188,20 +183,20 @@ Run from `optimism/packages/contracts-bedrock`:
 cd optimism/packages/contracts-bedrock
 
 forge script scripts/deploy/DeploySuperchain.s.sol:DeploySuperchain \
-  --sig 'run((address,address,address,bool,bytes32,bytes32))' \
-  "($DEPLOYER,$DEPLOYER,$DEPLOYER,false,0x0000000000000000000000000000000000000009000000000000000000000000,0x0000000000000000000000000000000000000009000000000000000000000000)" \
+  --sig 'run((address,address,bool))' \
+  "($DEPLOYER,$DEPLOYER,false)" \
   --rpc-url $L1_RPC --private-key $DEPLOYER_KEY \
   --broadcast --legacy --slow --gas-estimate-multiplier 110 \
   -vvvv
 ```
 
-Extract the 5 addresses from the broadcast log:
+Extract the addresses from the broadcast log:
 
 ```bash
 BROADCAST=broadcast/DeploySuperchain.s.sol/$L1_CHAIN_ID/run-latest.json
 export SUPERCHAIN_CONFIG_PROXY=$(jq -r '.returns.output_.value | fromjson | .superchainConfigProxy' $BROADCAST 2>/dev/null \
   || jq -r '.transactions[] | select(.contractName == "Proxy" and .arguments[0] == env.SUPERCHAIN_CONFIG_IMPL) | .contractAddress' $BROADCAST)
-# (also extract: protocolVersionsProxy, superchainProxyAdmin, superchainConfigImpl, protocolVersionsImpl)
+# (also extract: superchainProxyAdmin, superchainConfigImpl)
 ```
 
 In practice the cleanest way to read these out of the broadcast JSON is
@@ -213,8 +208,7 @@ jq -r '.transactions[] | "\(.contractName // "?")\t\(.contractAddress)"' \
   broadcast/DeploySuperchain.s.sol/$L1_CHAIN_ID/run-latest.json
 ```
 
-You'll need `superchainConfigProxy`, `protocolVersionsProxy`, and
-`superchainProxyAdmin` for step 2.
+You'll need `superchainConfigProxy` and `superchainProxyAdmin` for step 2.
 
 ---
 
@@ -237,14 +231,11 @@ struct Input {
     uint256 faultGameV2ClockExtension;
     uint256 faultGameV2MaxClockDuration;
     address superchainConfigProxy;
-    address protocolVersionsProxy;
     address superchainProxyAdmin;
     address l1ProxyAdminOwner;
     address challenger;
-    bool    skipFaultProofs;     // set TRUE on RSK to skip OptimismPortalInterop,
-                                 // FaultDisputeGame, PermissionedDisputeGame, and
-                                 // OPCMStandardValidator (each ~6 M gas to deploy
-                                 // and not used by the permissioned-only path)
+    address sp1Verifier;         // must be zero unless ZK_DISPUTE_GAME is in
+                                 // devFeatureBitmap
 }
 ```
 
@@ -252,8 +243,8 @@ ABI-encode the input with `cast`:
 
 ```bash
 INPUT_BYTES=$(cast abi-encode \
-  'f((uint256,uint256,uint256,uint256,uint256,uint256,bytes32,uint256,uint256,uint256,uint256,address,address,address,address,address,bool))' \
-  "(604800,126000,86400,604800,302400,8,0x0,73,30,10800,302400,$SUPERCHAIN_CONFIG_PROXY,$PROTOCOL_VERSIONS_PROXY,$SUPERCHAIN_PROXY_ADMIN,$DEPLOYER,$DEPLOYER,true)")
+  'f((uint256,uint256,uint256,uint256,uint256,uint256,bytes32,uint256,uint256,uint256,uint256,address,address,address,address,address))' \
+  "(604800,126000,86400,604800,302400,8,0x0000000000000000000000000000000000000000000000000000000000000000,73,30,10800,302400,$SUPERCHAIN_CONFIG_PROXY,$SUPERCHAIN_PROXY_ADMIN,$DEPLOYER,$DEPLOYER,0x0000000000000000000000000000000000000000)")
 
 forge script scripts/deploy/DeployImplementations.s.sol:DeployImplementations \
   --sig 'runWithBytes(bytes)' "$INPUT_BYTES" \
@@ -298,8 +289,10 @@ struct DeployOPChainInput {
     address opcm;
     string  saltMixer;
     uint64  gasLimit;
-    GameType  disputeGameType;             // uint32; 1 = permissioned
+    GameType  disputeGameType;             // uint32; must be 1 (PERMISSIONED_CANNON)
     Claim     disputeAbsolutePrestate;     // bytes32
+    Proposal  startingAnchorRoot;          // (bytes32 root, uint256 l2SequenceNumber); root != 0
+    Claim     cannonAbsolutePrestate;      // bytes32; unused on RSK, pass 0
     uint256 disputeMaxGameDepth;
     uint256 disputeSplitDepth;
     Duration disputeClockExtension;        // uint64 seconds
@@ -324,8 +317,8 @@ Run from `optimism/packages/contracts-rootstock`:
 cd optimism/packages/contracts-rootstock
 
 forge script script/RSKDeployOPChain.s.sol:RSKDeployOPChain \
-  --sig 'runSplit((address,address,address,address,address,address,uint32,uint32,uint256,address,string,uint64,uint32,bytes32,uint256,uint256,uint64,uint64,bool,uint32,uint64,address,bool))' \
-  "($DEPLOYER,$DEPLOYER,$BATCHER,$DEPLOYER,$PROPOSER,$DEPLOYER,1000000,1000000,$L2_CHAIN_ID,$OPCM,\"$L2_CHAIN_ID\",30000000,1,0x0000000000000000000000000000000000000000000000000000000000000001,73,30,10800,302400,false,0,0,$SUPERCHAIN_CONFIG_PROXY,false)" \
+  --sig 'runSplit((address,address,address,address,address,address,uint32,uint32,uint256,address,string,uint64,uint32,bytes32,(bytes32,uint256),bytes32,uint256,uint256,uint64,uint64,bool,uint32,uint64,address,bool))' \
+  "($DEPLOYER,$DEPLOYER,$BATCHER,$DEPLOYER,$PROPOSER,$DEPLOYER,1000000,1000000,$L2_CHAIN_ID,$OPCM,\"$L2_CHAIN_ID\",30000000,1,0x0000000000000000000000000000000000000000000000000000000000000001,(0xdead000000000000000000000000000000000000000000000000000000000000,0),0x0000000000000000000000000000000000000000000000000000000000000000,73,30,10800,302400,false,0,0,$SUPERCHAIN_CONFIG_PROXY,false)" \
   --rpc-url $L1_RPC --private-key $DEPLOYER_KEY \
   --broadcast --legacy --slow --gas-estimate-multiplier 110 \
   -vvvv
@@ -333,18 +326,26 @@ forge script script/RSKDeployOPChain.s.sol:RSKDeployOPChain \
 
 This emits **8 broadcasts** from this Forge invocation:
 
-| # | Function | Approx. padded gas |
-|---|---|---|
-| 1 | `CREATE` `RSKOPCMSplitter` | 4.7 M |
-| 2 | `deployStep1a_coreProxies` | 3.9 M |
-| 3 | `deployStep1b_remainingProxies` | 4.3 M |
-| 4 | `step2_systemConfigAndPortal` | 1.1 M |
-| 5 | `step3_messengerAndBridges` | 0.9 M |
-| 6 | `step4a_disputeFactoryAndWeth` | 0.4 M |
-| 7 | `step4b_anchorAndGames` | 0.7 M |
-| 8 | `step5_finalize` | 0.1 M |
+| # | Function | Gas used | Gas limit sent |
+|---|---|---|---|
+| 1 | `CREATE` `RSKOPCMSplitter` | 4.78 M | 5.26 M |
+| 2 | `deployStep1a_coreProxies` | 3.36 M | 3.93 M |
+| 3 | `deployStep1b_remainingProxies` | 3.48 M | 4.07 M |
+| 4 | `step2_systemConfigAndPortal` | 1.04 M | 1.22 M |
+| 5 | `step3_messengerAndBridges` | 0.81 M | 0.94 M |
+| 6 | `step4a_disputeFactoryAndWeth` | 0.36 M | 0.45 M |
+| 7 | `step4b_anchorAndGames` | 0.63 M | 0.78 M |
+| 8 | `step5_finalize` | 0.09 M | 0.10 M |
 
-All comfortably under the 6.8 M RSKIP144 sublist cap.
+Measured on 2026-10-21 with the command above, against a local anvil node
+(Ethereum gas schedule) that already had steps 1 and 2. "Gas used" is
+the receipt's `gasUsed`; "Gas limit sent" is the limit forge put on the
+transaction (its estimate × 1.1, from `--gas-estimate-multiplier 110`), which
+is what RSKj checks against the 6.8 M RSKIP144 sublist cap. RSKj's gas
+schedule differs from Ethereum's, so rootstack's `verify-regtest` is the
+check that counts. Without a node, `forge test --gas-report` on
+`test_lifecycle_advancesThroughAllPhasesAndSeals` lands within a few hundred
+gas of the "Gas used" column.
 
 The broadcast file will be at
 `broadcast/RSKDeployOPChain.s.sol/$L1_CHAIN_ID/runSplit-latest.json`.
@@ -383,7 +384,7 @@ contract L2GenesisDump is L2Genesis {
 }
 ```
 
-The Input tuple is large (32 fields). The minimum non-zero values for an
+The Input tuple is large (29 fields). The minimum non-zero values for an
 RSK regtest are below; anything not mentioned can be `address(0)`, `0`,
 or `false`:
 
@@ -408,26 +409,29 @@ struct Input {
     uint256 operatorFeeVaultMinimumWithdrawalAmount;
     uint256 operatorFeeVaultWithdrawalNetwork;
     address governanceTokenOwner;
-    uint256 fork;                                       // 8 = Holocene
+    uint256 fork;                                       // 7 = Jovian (the `Fork` enum
+                                                        // in scripts/libraries/Config.sol)
     bool    enableGovernance;                           // false
     bool    fundDevAccounts;                            // true on regtest
-    bool    useRevenueShare;                            // false
-    address chainFeesRecipient;
-    address l1FeesDepositor;
     bool    useCustomGasToken;                          // false
     bool    useInterop;                                 // false
     string  gasPayingTokenName;                         // ""
     string  gasPayingTokenSymbol;                       // ""
     uint256 nativeAssetLiquidityAmount;                 // 0
     address liquidityControllerOwner;
-    bytes32 devFeatureBitmap;                           // 0x0
+    bytes32 devFeatureBitmap;                           // 32 zero bytes
 }
 ```
 
+`fork` is an index into the `Fork` enum, not a hardfork name, and the enum
+grows at the end: at op-node/v1.19.9, 7 is JOVIAN (what rootstack runs) and 8
+is KARST. Re-check the enum when you sync a new release.
+
 **Note:** the `Input` struct has historically drifted between OP Stack
 release tags (`deployCrossL2Inbox` was removed, `useInterop` and
-`devFeatureBitmap` were added on `op-batcher/v1.16.7`). If you regenerate
-this from a different release, re-grep `struct Input` in
+`devFeatureBitmap` were added on `op-batcher/v1.16.7`, and `useRevenueShare`,
+`chainFeesRecipient` and `l1FeesDepositor` were removed by op-node/v1.19.9).
+If you regenerate this from a different release, re-grep `struct Input` in
 `scripts/L2Genesis.s.sol` and re-derive the tuple signature.
 
 Run **without** `--broadcast` (state dump runs locally):
@@ -436,8 +440,8 @@ Run **without** `--broadcast` (state dump runs locally):
 cd optimism/packages/contracts-bedrock
 
 forge script scripts/L2GenesisDump.s.sol:L2GenesisDump \
-  --sig 'runWithDump((uint256,uint256,address,address,address,address,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,bool,bool,bool,address,address,bool,bool,string,string,uint256,address,bytes32),string)' \
-  "($L1_CHAIN_ID,$L2_CHAIN_ID,$L1_CROSS_DOMAIN_MESSENGER_PROXY,$L1_STANDARD_BRIDGE_PROXY,$L1_ERC721_BRIDGE_PROXY,$DEPLOYER,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,8,false,true,false,$DEPLOYER,$DEPLOYER,false,false,\"\",\"\",0,$DEPLOYER,0x0)" \
+  --sig 'runWithDump((uint256,uint256,address,address,address,address,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,uint256,address,uint256,bool,bool,bool,bool,string,string,uint256,address,bytes32),string)' \
+  "($L1_CHAIN_ID,$L2_CHAIN_ID,$L1_CROSS_DOMAIN_MESSENGER_PROXY,$L1_STANDARD_BRIDGE_PROXY,$L1_ERC721_BRIDGE_PROXY,$DEPLOYER,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,10000000000000000000,0,$DEPLOYER,7,false,true,false,false,\"\",\"\",0,$DEPLOYER,0x0000000000000000000000000000000000000000000000000000000000000000)" \
   "$(pwd)/../../../l2-allocs.json" \
   -vvvv
 ```

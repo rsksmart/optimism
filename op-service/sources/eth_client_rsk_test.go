@@ -17,6 +17,7 @@ package sources
 import (
 	"context"
 	"errors"
+	"math/big"
 	"math/rand"
 	"testing"
 
@@ -26,8 +27,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
 )
 
 // rskTamperHash returns a copy of h with the first byte flipped, so that a
@@ -135,7 +138,7 @@ func TestRSK_EthClient_BlockVerifierHook(t *testing.T) {
 
 // TestRSK_EthClient_TxHashesFromBlockHook covers eth_client.go FetchReceipts:
 // with a nil TxHashesFromBlock the receipt-fetch tx hashes are derived locally
-// (eth.TransactionsToHashes); when set, the hook fully replaces that source, and
+// (RawTransactions.Hashes); when set, the hook fully replaces that source, and
 // an error from it aborts the fetch. A capturing ReceiptsValidator records the
 // tx hashes actually handed to the receipts fetch, so each case can assert which
 // source won.
@@ -173,7 +176,7 @@ func TestRSK_EthClient_TxHashesFromBlockHook(t *testing.T) {
 		ethcl, block, captured := buildClient(nil)
 		_, _, err := ethcl.FetchReceipts(ctx, block.Hash)
 		require.NoError(t, err)
-		require.Equal(t, eth.TransactionsToHashes(block.Transactions), *captured,
+		require.Equal(t, block.Transactions.Hashes(), *captured,
 			"nil hook must feed locally-derived tx hashes to the receipts fetch")
 	})
 
@@ -264,4 +267,130 @@ func TestRSK_RPCReceiptsFetcher_ReceiptsValidatorHook(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 		require.NotContains(t, err.Error(), "unexpected nil block number")
 	})
+
+	t.Run("[null] receipt is rejected before the validator", func(t *testing.T) {
+		// eth_getBlockReceipts (RPCKindStandard) can return a null element, which
+		// the conversion handed to the hook would dereference.
+		m := new(mockRPC)
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(420)), numTxs)
+		m.On("CallContext", ctx, mock.Anything, "eth_getBlockReceipts", mock.Anything).
+			Run(func(args mock.Arguments) { *(args[1].(*optypes.Receipts)) = optypes.Receipts{nil} }).
+			Return([]error{nil})
+		called := false
+		rp := NewRPCReceiptsFetcher(m, nil, RPCReceiptsConfig{
+			ProviderKind: RPCKindStandard,
+			ReceiptsValidator: func(context.Context, eth.BlockID, common.Hash, []common.Hash, types.Receipts) error {
+				called = true
+				return nil
+			},
+		})
+		info := eth.HeaderBlockInfoTrusted(block.Hash, block.CreateGethHeader())
+
+		_, err := rp.FetchReceipts(ctx, info, block.Transactions.Hashes())
+		require.ErrorContains(t, err, "receipt of tx 0 returns nil on retrieval")
+		require.False(t, called, "the validator must not see a null receipt")
+	})
+}
+
+// TestRSK_EthClient_ByNumberAndLabelKeepRPCHash covers the by-number and
+// by-label accessors of eth_client.go: each must report the block hash the RPC
+// returned (eth.HeaderBlockInfoTrusted), not re-keccak the go-ethereum header
+// (eth.HeaderBlockInfo). On Ethereum the two are equal, so upstream tests can't
+// tell them apart; on RSK (RSKIP-92) they differ and the recomputed one is
+// wrong.
+func TestRSK_EthClient_ByNumberAndLabelKeepRPCHash(t *testing.T) {
+	ctx := context.Background()
+
+	// rskBlock returns a block whose RPC hash differs from its header's keccak,
+	// as an RSK block's does. With deposit set, its first tx is a deposit.
+	rskBlock := func(t *testing.T, deposit bool) *RPCBlock {
+		block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(9)), 1)
+		if deposit {
+			raw, err := (&optypes.DepositTx{Value: new(big.Int), Gas: 21_000}).MarshalBinary()
+			require.NoError(t, err)
+			block.Transactions = append(RawTransactions{raw}, block.Transactions...)
+		}
+		block.Hash = rskTamperHash(block.Hash)
+		require.NotEqual(t, block.CreateGethHeader().Hash(), block.Hash)
+		return block
+	}
+
+	// rskClient serves block for every eth_getBlockByNumber call, behind
+	// verifier hooks that accept it as RSK's do (the defaults would reject the
+	// hash).
+	rskClient := func(block *RPCBlock) *EthClient {
+		m := new(mockRPC)
+		m.On("CallContext", ctx, mock.Anything, "eth_getBlockByNumber", mock.Anything).
+			Run(func(args mock.Arguments) {
+				switch out := args[1].(type) {
+				case **RPCHeader:
+					*out = &block.RPCHeader
+				case **RPCBlock:
+					*out = block
+				}
+			}).
+			Return([]error{nil})
+		ethcl := newEthClientWithCaches(nil, 1)
+		ethcl.blockRefsCache = caching.NewLRUCache[common.Hash, eth.BlockRef](nil, "blockrefs", 1)
+		ethcl.client = m
+		ethcl.headerVerifier = func(context.Context, *types.Header) error { return nil }
+		ethcl.blockVerifier = func(context.Context, *types.Header, types.Transactions) error { return nil }
+		return ethcl
+	}
+
+	infoHash := func(info eth.BlockInfo, err error) (common.Hash, error) {
+		if err != nil {
+			return common.Hash{}, err
+		}
+		return info.Hash(), nil
+	}
+
+	tests := []struct {
+		name    string
+		deposit bool
+		hash    func(s *EthClient, num uint64) (common.Hash, error)
+	}{
+		{name: "InfoByNumber", hash: func(s *EthClient, num uint64) (common.Hash, error) {
+			return infoHash(s.InfoByNumber(ctx, num))
+		}},
+		{name: "InfoByLabel", hash: func(s *EthClient, _ uint64) (common.Hash, error) {
+			return infoHash(s.InfoByLabel(ctx, eth.Unsafe))
+		}},
+		{name: "InfoAndTxsByNumber", hash: func(s *EthClient, num uint64) (common.Hash, error) {
+			info, _, err := s.InfoAndTxsByNumber(ctx, num)
+			return infoHash(info, err)
+		}},
+		{name: "InfoAndTxsByLabel", hash: func(s *EthClient, _ uint64) (common.Hash, error) {
+			info, _, err := s.InfoAndTxsByLabel(ctx, eth.Unsafe)
+			return infoHash(info, err)
+		}},
+		{name: "InfoAndUserTxsByNumber", hash: func(s *EthClient, num uint64) (common.Hash, error) {
+			info, _, err := s.InfoAndUserTxsByNumber(ctx, num)
+			return infoHash(info, err)
+		}},
+		{name: "InfoAndDepositsByNumber", deposit: true, hash: func(s *EthClient, num uint64) (common.Hash, error) {
+			info, _, err := s.InfoAndDepositsByNumber(ctx, num)
+			return infoHash(info, err)
+		}},
+		{name: "InfoAndFirstDepositByNumber", deposit: true, hash: func(s *EthClient, num uint64) (common.Hash, error) {
+			info, _, err := s.InfoAndFirstDepositByNumber(ctx, num)
+			return infoHash(info, err)
+		}},
+		{name: "BlockRefByNumber", hash: func(s *EthClient, num uint64) (common.Hash, error) {
+			ref, err := s.BlockRefByNumber(ctx, num)
+			return ref.Hash, err
+		}},
+		{name: "BlockRefByLabel", hash: func(s *EthClient, _ uint64) (common.Hash, error) {
+			ref, err := s.BlockRefByLabel(ctx, eth.Unsafe)
+			return ref.Hash, err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block := rskBlock(t, tt.deposit)
+			got, err := tt.hash(rskClient(block), uint64(block.Number))
+			require.NoError(t, err)
+			require.Equal(t, block.Hash, got, "must keep the RPC-reported hash, not recompute it from the header")
+		})
+	}
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -24,13 +23,13 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/upgrade/embedded"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
@@ -109,6 +108,9 @@ func DefaultPrivkey(t *testing.T) (string, *ecdsa.PrivateKey, *devkeys.MnemonicD
 
 	return pkHex, pk, dk
 }
+
+// defaultInitBond matches Deploy.s.sol DEFAULT_INIT_BOND (0.08 ether).
+var defaultInitBond = big.NewInt(8e16)
 
 // lastUsedOPCMVersionSelector is the selector for SystemConfig.lastUsedOPCMVersion()
 // keccak256("lastUsedOPCMVersion()")[:4] = 0x9fabcc84
@@ -240,7 +242,7 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 	disputeGameConfigs := []embedded.DisputeGameConfig{
 		{
 			Enabled:  true,
-			InitBond: big.NewInt(0),
+			InitBond: new(big.Int).Set(defaultInitBond),
 			GameType: embedded.GameTypeCannon,
 			FaultDisputeGameConfig: &embedded.FaultDisputeGameConfig{
 				AbsolutePrestate: opcmregistry.DummyCannonPrestate,
@@ -248,7 +250,7 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 		},
 		{
 			Enabled:  true,
-			InitBond: big.NewInt(0),
+			InitBond: new(big.Int).Set(defaultInitBond),
 			GameType: embedded.GameTypePermissionedCannon,
 			PermissionedDisputeGameConfig: &embedded.PermissionedDisputeGameConfig{
 				AbsolutePrestate: opcmregistry.DummyCannonPrestate,
@@ -258,7 +260,7 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 		},
 		{
 			Enabled:  true,
-			InitBond: big.NewInt(0),
+			InitBond: new(big.Int).Set(defaultInitBond),
 			GameType: embedded.GameTypeCannonKona,
 			FaultDisputeGameConfig: &embedded.FaultDisputeGameConfig{
 				AbsolutePrestate: opcmregistry.DummyCannonKonaPrestate,
@@ -267,12 +269,7 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 		{
 			Enabled:  false,
 			InitBond: big.NewInt(0),
-			GameType: embedded.GameTypeSuperCannon,
-		},
-		{
-			Enabled:  false,
-			InitBond: big.NewInt(0),
-			GameType: embedded.GameTypeSuperPermCannon,
+			GameType: embedded.GameTypeSuperPermissioned,
 		},
 		{
 			Enabled:  false,
@@ -285,11 +282,6 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 			GameType: embedded.GameTypeZKDisputeGame,
 		},
 	}
-
-	// Sort by game type (required by OPCM)
-	sort.Slice(disputeGameConfigs, func(i, j int) bool {
-		return disputeGameConfigs[i].GameType < disputeGameConfigs[j].GameType
-	})
 
 	return embedded.UpgradeOPChainInput{
 		Prank: prank,

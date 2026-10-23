@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl/contract"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
+	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/plan"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
@@ -25,8 +26,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/sync/errgroup"
 
+	messages "github.com/ethereum-optimism/optimism/op-core/interop/messages"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
-	suptypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
 // TestInitExecMsg tests basic interop messaging
@@ -84,8 +85,8 @@ func TestInitExecMsgWithDSL(gt *testing.T) {
 	// Manually build identifier, message, accesslist for executing message
 	// Single event in tx so index is 0
 	logIdx := uint32(0)
-	payload := suptypes.LogToMessagePayload(receipt.Logs[logIdx])
-	identifier := suptypes.Identifier{
+	payload := messages.LogToMessagePayload(receipt.Logs[logIdx])
+	identifier := messages.Identifier{
 		Origin:      eventLoggerAddress,
 		BlockNumber: bigs.Uint64Strict(receipt.BlockNumber),
 		LogIndex:    logIdx,
@@ -94,12 +95,12 @@ func TestInitExecMsgWithDSL(gt *testing.T) {
 	}
 	payloadHash := crypto.Keccak256Hash(payload)
 	msgHash := eth.Bytes32(payloadHash)
-	msg := suptypes.Message{
+	msg := messages.Message{
 		Identifier: identifier, PayloadHash: payloadHash,
 	}
 	accessList := types.AccessList{{
 		Address:     predeploys.CrossL2InboxAddr,
-		StorageKeys: suptypes.EncodeAccessList([]suptypes.Access{msg.Access()}),
+		StorageKeys: messages.EncodeAccessList([]messages.Access{msg.Access()}),
 	}}
 
 	call := crossL2Inbox.ValidateMessage(identifier, msgHash)
@@ -149,13 +150,13 @@ func TestRandomDirectedGraph(gt *testing.T) {
 	fundAmount := eth.OneTenthEther
 
 	// jitter randomizes tx
-	jitter := func(rng *rand.Rand) {
-		time.Sleep(time.Duration(rng.Intn(250)) * time.Millisecond)
+	jitter := func(ctx context.Context, rng *rand.Rand) error {
+		return clock.SystemClock.SleepCtx(ctx, time.Duration(rng.Intn(250))*time.Millisecond) // nosemgrep: flake-sleep-in-test -- deliberate jitter for load test tx ordering
 	}
 
 	// fund EOAs per chain
 	eoasPerChain := make([][]*dsl.EOA, l2ChainNum)
-	for chainIdx, funder := range []*dsl.Funder{sys.FunderA, sys.FunderB} {
+	for chainIdx, funder := range []*dsl.FunderEOA{sys.FunderA, sys.FunderB} {
 		eoas := funder.NewFundedEOAs(pubSubPairCnt, fundAmount)
 		eoasPerChain[chainIdx] = eoas
 	}
@@ -190,7 +191,9 @@ func TestRandomDirectedGraph(gt *testing.T) {
 					case <-ctx.Done():
 						return ctx.Err()
 					}
-					jitter(publisherRng)
+					if err := jitter(ctx, publisherRng); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
@@ -216,7 +219,9 @@ func TestRandomDirectedGraph(gt *testing.T) {
 						"destChainID", tx.PlannedTx.ChainID.Value(),
 						"sourceBlockNum", dependsOn.PlannedTx.IncludedBlock.Value().Number,
 						"destBlockNum", receipt.BlockNumber)
-					jitter(subscriberRng)
+					if err := jitter(ctx, subscriberRng); err != nil {
+						return err
+					}
 				}
 			}
 		})
@@ -597,8 +602,10 @@ func TestExecMessageInvalidAttributes(gt *testing.T) {
 
 	for _, faults := range faultsLists {
 		logger.Info("Attempt to validate message with invalid attribute", "faults", faults)
-		// Intent to validate message on chain B
-		txC := txintent.NewIntent[*txintent.ExecTrigger, *txintent.InteropOutput](chuck.Plan())
+		// Intent to validate message on chain B.
+		// The identifiers are fabricated, so their timestamps name blocks chain A will never build.
+		txC := txintent.NewIntent[*txintent.ExecTrigger, *txintent.InteropOutput](
+			chuck.Plan(), txintent.WithoutInteropDependencyWait())
 		txC.Content.DependOn(&txA.Result)
 
 		// Random select event index in tx for injecting faults

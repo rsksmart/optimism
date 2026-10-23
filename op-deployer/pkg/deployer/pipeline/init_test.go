@@ -10,9 +10,12 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/integration_test/shared"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/testutil"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
-	"github.com/ethereum/go-ethereum/log"
+	opbindings "github.com/ethereum-optimism/optimism/op-e2e/bindings"
+	"github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
@@ -22,8 +25,26 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/testutils/devnet"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateInputsRejectsSP1VerifierWithPredeployedOPCM(t *testing.T) {
+	_, _, dk := shared.DefaultPrivkey(t)
+	l1ChainID := big.NewInt(900)
+	loc := artifacts.MustNewLocatorFromURL("file:///test-artifacts")
+	intent, st := shared.NewIntent(t, l1ChainID, dk, uint256.NewInt(1), loc, loc, standard.GasLimit)
+
+	opcmAddress := common.Address{0x06}
+	intent.OPCMAddress = &opcmAddress
+	intent.SuperchainRoles = nil
+	intent.GlobalDeployOverrides = map[string]any{
+		"sp1Verifier": common.Address{0x05},
+	}
+
+	err := ValidateInputs(intent, st)
+	require.ErrorContains(t, err, "sp1Verifier must not be specified when using a predeployed OPCM")
+}
 
 func TestInitLiveStrategy_OPCMReuseLogicSepolia(t *testing.T) {
 	t.Parallel()
@@ -114,11 +135,18 @@ func TestInitLiveStrategy_OPCMReuseLogicSepolia(t *testing.T) {
 			require.NoError(t, err)
 			proxyAdmin, err := standard.SuperchainProxyAdminAddrFor(l1ChainID)
 			require.NoError(t, err)
+			proxyAdminContract, err := opbindings.NewProxyAdmin(proxyAdmin, client)
+			require.NoError(t, err)
+			superchainConfigImpl, err := proxyAdminContract.GetProxyImplementation(
+				&bind.CallOpts{Context: ctx},
+				superCfg.SuperchainConfigAddr,
+			)
+			require.NoError(t, err)
 
 			expDeployment := &addresses.SuperchainContracts{
 				SuperchainProxyAdminImpl: proxyAdmin,
 				SuperchainConfigProxy:    superCfg.SuperchainConfigAddr,
-				SuperchainConfigImpl:     common.HexToAddress("0xb08Cc720F511062537ca78BdB0AE691F04F5a957"),
+				SuperchainConfigImpl:     superchainConfigImpl,
 			}
 
 			// Tagged locator will reuse the existing superchain and OPCM

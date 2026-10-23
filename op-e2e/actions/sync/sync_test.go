@@ -17,7 +17,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -30,6 +29,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/event"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
@@ -188,7 +188,7 @@ func TestBackupUnsafe(gt *testing.T) {
 	upgradesHelpers.ApplyDeltaTimeOffset(dp, &minTs)
 	dp.DeployConfig.L2BlockTime = 2
 	sd := e2eutils.Setup(t, dp, actionsHelpers.DefaultAlloc)
-	log := testlog.Logger(t, log.LvlInfo)
+	log := testlog.Logger(t, log.LevelInfo)
 	_, dp, miner, sequencer, seqEng, verifier, _, batcher := actionsHelpers.SetupReorgTestActors(t, dp, sd, log)
 	l2Cl := seqEng.EthClient()
 	seqEngCl, err := sources.NewEngineClient(seqEng.RPCClient(), log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
@@ -254,7 +254,9 @@ func TestBackupUnsafe(gt *testing.T) {
 			block = block.WithBody(types.Body{Transactions: []*types.Transaction{block.Transactions()[0], invalidTx}})
 		}
 		// Add A1, B2, B3, B4, B5 into the channel
-		_, err = channelOut.AddBlock(sd.RollupCfg, block)
+		payload, err := eth.BlockAsPayload(block, sd.RollupCfg)
+		require.NoError(t, err)
+		_, err = channelOut.AddBlock(sd.RollupCfg, payload)
 		require.NoError(t, err)
 	}
 
@@ -349,7 +351,7 @@ func TestBackupUnsafeReorgForkChoiceInputError(gt *testing.T) {
 	upgradesHelpers.ApplyDeltaTimeOffset(dp, &minTs)
 	dp.DeployConfig.L2BlockTime = 2
 	sd := e2eutils.Setup(t, dp, actionsHelpers.DefaultAlloc)
-	log := testlog.Logger(t, log.LvlInfo)
+	log := testlog.Logger(t, log.LevelInfo)
 	_, dp, miner, sequencer, seqEng, verifier, _, batcher := actionsHelpers.SetupReorgTestActors(t, dp, sd, log)
 	l2Cl := seqEng.EthClient()
 	seqEngCl, err := sources.NewEngineClient(seqEng.RPCClient(), log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
@@ -415,7 +417,9 @@ func TestBackupUnsafeReorgForkChoiceInputError(gt *testing.T) {
 			block = block.WithBody(types.Body{Transactions: []*types.Transaction{block.Transactions()[0], invalidTx}})
 		}
 		// Add A1, B2, B3, B4, B5 into the channel
-		_, err = channelOut.AddBlock(sd.RollupCfg, block)
+		payload, err := eth.BlockAsPayload(block, sd.RollupCfg)
+		require.NoError(t, err)
+		_, err = channelOut.AddBlock(sd.RollupCfg, payload)
 		require.NoError(t, err)
 	}
 
@@ -482,7 +486,7 @@ func TestBackupUnsafeReorgForkChoiceNotInputError(gt *testing.T) {
 	upgradesHelpers.ApplyDeltaTimeOffset(dp, &minTs)
 	dp.DeployConfig.L2BlockTime = 2
 	sd := e2eutils.Setup(t, dp, actionsHelpers.DefaultAlloc)
-	log := testlog.Logger(t, log.LvlInfo)
+	log := testlog.Logger(t, log.LevelInfo)
 	_, dp, miner, sequencer, seqEng, verifier, _, batcher := actionsHelpers.SetupReorgTestActors(t, dp, sd, log)
 	l2Cl := seqEng.EthClient()
 	seqEngCl, err := sources.NewEngineClient(seqEng.RPCClient(), log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
@@ -548,7 +552,9 @@ func TestBackupUnsafeReorgForkChoiceNotInputError(gt *testing.T) {
 			block = block.WithBody(types.Body{Transactions: []*types.Transaction{block.Transactions()[0], invalidTx}})
 		}
 		// Add A1, B2, B3, B4, B5 into the channel
-		_, err = channelOut.AddBlock(sd.RollupCfg, block)
+		payload, err := eth.BlockAsPayload(block, sd.RollupCfg)
+		require.NoError(t, err)
+		_, err = channelOut.AddBlock(sd.RollupCfg, payload)
 		require.NoError(t, err)
 	}
 
@@ -962,7 +968,9 @@ func TestInvalidPayloadInSpanBatch(gt *testing.T) {
 			block = block.WithBody(types.Body{Transactions: []*types.Transaction{block.Transactions()[0], invalidTx}})
 		}
 		// Add A1 ~ A12 into the channel
-		_, err = channelOut.AddBlock(sd.RollupCfg, block)
+		payload, err := eth.BlockAsPayload(block, sd.RollupCfg)
+		require.NoError(t, err)
+		_, err = channelOut.AddBlock(sd.RollupCfg, payload)
 		require.NoError(t, err)
 	}
 
@@ -1011,7 +1019,9 @@ func TestInvalidPayloadInSpanBatch(gt *testing.T) {
 			block = block.WithBody(types.Body{Transactions: []*types.Transaction{block.Transactions()[0], tx}})
 		}
 		// Add B1, A2 ~ A12 into the channel
-		_, err = channelOut.AddBlock(sd.RollupCfg, block)
+		payload, err := eth.BlockAsPayload(block, sd.RollupCfg)
+		require.NoError(t, err)
+		_, err = channelOut.AddBlock(sd.RollupCfg, payload)
 		require.NoError(t, err)
 	}
 	// Submit span batch(B1, A2, ... A12)

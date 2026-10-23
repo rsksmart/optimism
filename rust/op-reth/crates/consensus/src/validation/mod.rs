@@ -18,6 +18,10 @@ use reth_optimism_forks::OpHardforks;
 use reth_optimism_primitives::DepositReceipt;
 use reth_primitives_traits::{BlockBody, GotExpected, receipt::gas_spent_by_transactions};
 
+/// UPSTREAM-MIRROR(copy): reth@rev:0fbe428
+/// `reth_consensus_common::validation::validate_body_against_header`
+///
+/// Copies the generic body/header checks and replaces withdrawals-root handling after Isthmus.
 /// Ensures the block response data matches the header.
 ///
 /// This ensures the body response items match the header's hashes:
@@ -81,6 +85,10 @@ where
     Ok(())
 }
 
+/// UPSTREAM-MIRROR(copy): reth@rev:0fbe428
+/// `reth_ethereum_consensus::validation::validate_block_post_execution`
+///
+/// Copies upstream post-execution validation with OP receipt roots and Jovian DA accounting.
 /// Validate a block with regard to execution results:
 ///
 /// - Compares the receipts root in the block header to the block body
@@ -155,6 +163,9 @@ pub fn validate_block_post_execution<R: DepositReceipt>(
     Ok(())
 }
 
+/// UPSTREAM-MIRROR(copy): reth@rev:0fbe428 `reth_ethereum_consensus::validation::verify_receipts`
+///
+/// Copies the private upstream helper and substitutes OP receipt-root calculation.
 /// Verify the calculated receipts root against the expected receipts root.
 fn verify_receipts_optimism<R: DepositReceipt>(
     expected_receipts_root: B256,
@@ -181,6 +192,10 @@ fn verify_receipts_optimism<R: DepositReceipt>(
     Ok(())
 }
 
+/// UPSTREAM-MIRROR(copy): reth@rev:0fbe428
+/// `reth_ethereum_consensus::validation::compare_receipts_root_and_logs_bloom`
+///
+/// Kept identical to the private upstream comparison helper.
 /// Compare the calculated receipts root with the expected receipts root, also compare
 /// the calculated logs bloom with the expected logs bloom.
 fn compare_receipts_root_and_logs_bloom(
@@ -210,10 +225,10 @@ mod tests {
     use alloy_consensus::Header;
     use alloy_eips::eip7685::Requests;
     use alloy_primitives::{Bytes, U256, b256, hex};
-    use op_alloy_consensus::OpTxEnvelope;
+    use op_alloy_consensus::{OpTxEnvelope, encode_jovian_extra_data};
     use reth_chainspec::{BaseFeeParams, ChainSpec, EthChainSpec, ForkCondition, Hardfork};
-    use reth_optimism_chainspec::{BASE_SEPOLIA, OpChainSpec};
-    use reth_optimism_forks::{BASE_SEPOLIA_HARDFORKS, OpHardfork};
+    use reth_optimism_chainspec::{OP_SEPOLIA, OpChainSpec};
+    use reth_optimism_forks::OpHardfork;
     use reth_optimism_primitives::OpReceipt;
     use std::sync::Arc;
 
@@ -223,17 +238,17 @@ mod tests {
     const BLOCK_TIME_SECONDS: u64 = 2;
 
     fn holocene_chainspec() -> Arc<OpChainSpec> {
-        let mut hardforks = BASE_SEPOLIA_HARDFORKS.clone();
+        let mut hardforks = OP_SEPOLIA.inner.hardforks.clone();
         hardforks
             .insert(OpHardfork::Holocene.boxed(), ForkCondition::Timestamp(HOLOCENE_TIMESTAMP));
         Arc::new(OpChainSpec {
             inner: ChainSpec {
-                chain: BASE_SEPOLIA.inner.chain,
-                genesis: BASE_SEPOLIA.inner.genesis.clone(),
-                genesis_header: BASE_SEPOLIA.inner.genesis_header.clone(),
+                chain: OP_SEPOLIA.inner.chain,
+                genesis: OP_SEPOLIA.inner.genesis.clone(),
+                genesis_header: OP_SEPOLIA.inner.genesis_header.clone(),
                 paris_block_and_final_difficulty: Some((0, U256::from(0))),
                 hardforks,
-                base_fee_params: BASE_SEPOLIA.inner.base_fee_params.clone(),
+                base_fee_params: OP_SEPOLIA.inner.base_fee_params.clone(),
                 prune_delete_limit: 10000,
                 ..Default::default()
             },
@@ -241,7 +256,7 @@ mod tests {
     }
 
     fn isthmus_chainspec() -> OpChainSpec {
-        let mut chainspec = BASE_SEPOLIA.as_ref().clone();
+        let mut chainspec = OP_SEPOLIA.as_ref().clone();
         chainspec
             .inner
             .hardforks
@@ -250,7 +265,7 @@ mod tests {
     }
 
     fn jovian_chainspec() -> OpChainSpec {
-        let mut chainspec = BASE_SEPOLIA.as_ref().clone();
+        let mut chainspec = OP_SEPOLIA.as_ref().clone();
         chainspec
             .inner
             .hardforks
@@ -260,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_get_base_fee_pre_holocene() {
-        let op_chain_spec = BASE_SEPOLIA.clone();
+        let op_chain_spec = OP_SEPOLIA.clone();
         let parent = Header {
             base_fee_per_gas: Some(1),
             gas_used: 15763614,
@@ -291,10 +306,9 @@ mod tests {
             &parent,
             HOLOCENE_TIMESTAMP + 5,
         );
-        assert_eq!(
-            base_fee.unwrap(),
-            op_chain_spec.next_block_base_fee(&parent, 0).unwrap_or_default()
-        );
+        // An all-zero Holocene extraData encodes a zero denominator/elasticity, which is invalid
+        // per the Holocene header rules, so no base fee can be derived.
+        assert_eq!(base_fee, None);
     }
 
     #[test]
@@ -323,7 +337,7 @@ mod tests {
 
     // <https://sepolia.basescan.org/block/19773628>
     #[test]
-    fn test_get_base_fee_holocene_extra_data_set_base_sepolia() {
+    fn test_get_base_fee_holocene_extra_data_set_op_sepolia() {
         let parent = Header {
             base_fee_per_gas: Some(507),
             gas_used: 4847634,
@@ -334,7 +348,7 @@ mod tests {
         };
 
         let base_fee = reth_optimism_chainspec::OpChainSpec::next_block_base_fee(
-            &*BASE_SEPOLIA,
+            &*OP_SEPOLIA,
             &parent,
             1735315546,
         )
@@ -363,7 +377,7 @@ mod tests {
         };
 
         let base_fee = reth_optimism_chainspec::OpChainSpec::next_block_base_fee(
-            &*BASE_SEPOLIA,
+            &*OP_SEPOLIA,
             &parent,
             1735315546,
         );
@@ -405,13 +419,14 @@ mod tests {
         const CURR_BASE_FEE: u64 = 1;
         const MIN_BASE_FEE: u64 = 10;
 
-        let mut extra_data = Vec::new();
-        extra_data.push(JOVIAN_EXTRA_DATA_VERSION_BYTE);
-        // eip1559 params
-        extra_data.append(&mut [0_u8; 8].to_vec());
-        // min base fee
-        extra_data.append(&mut MIN_BASE_FEE.to_be_bytes().to_vec());
-        let extra_data = Bytes::from(extra_data);
+        // A real header never carries raw (0, 0) eip1559 params: zero payload-attribute params are
+        // encoded as the chain's default params. Build the parent's extraData the same way.
+        let extra_data = encode_jovian_extra_data(
+            [0u8; 8].into(),
+            jovian_chainspec().base_fee_params_at_timestamp(JOVIAN_TIMESTAMP + BLOCK_TIME_SECONDS),
+            MIN_BASE_FEE,
+        )
+        .unwrap();
 
         let op_chain_spec = jovian_chainspec();
         let parent = Header {
@@ -435,13 +450,14 @@ mod tests {
     fn test_jovian_min_base_fee_cannot_decrease() {
         const MIN_BASE_FEE: u64 = 10;
 
-        let mut extra_data = Vec::new();
-        extra_data.push(JOVIAN_EXTRA_DATA_VERSION_BYTE);
-        // eip1559 params
-        extra_data.append(&mut [0_u8; 8].to_vec());
-        // min base fee
-        extra_data.append(&mut MIN_BASE_FEE.to_be_bytes().to_vec());
-        let extra_data = Bytes::from(extra_data);
+        // A real header never carries raw (0, 0) eip1559 params: zero payload-attribute params are
+        // encoded as the chain's default params. Build the parent's extraData the same way.
+        let extra_data = encode_jovian_extra_data(
+            [0u8; 8].into(),
+            jovian_chainspec().base_fee_params_at_timestamp(JOVIAN_TIMESTAMP + BLOCK_TIME_SECONDS),
+            MIN_BASE_FEE,
+        )
+        .unwrap();
 
         let op_chain_spec = jovian_chainspec();
 
@@ -482,13 +498,14 @@ mod tests {
     fn test_jovian_base_fee_can_decrease_if_above_min_base_fee() {
         const MIN_BASE_FEE: u64 = 10;
 
-        let mut extra_data = Vec::new();
-        extra_data.push(JOVIAN_EXTRA_DATA_VERSION_BYTE);
-        // eip1559 params
-        extra_data.append(&mut [0_u8; 8].to_vec());
-        // min base fee
-        extra_data.append(&mut MIN_BASE_FEE.to_be_bytes().to_vec());
-        let extra_data = Bytes::from(extra_data);
+        // A real header never carries raw (0, 0) eip1559 params: zero payload-attribute params are
+        // encoded as the chain's default params. Build the parent's extraData the same way.
+        let extra_data = encode_jovian_extra_data(
+            [0u8; 8].into(),
+            jovian_chainspec().base_fee_params_at_timestamp(JOVIAN_TIMESTAMP + BLOCK_TIME_SECONDS),
+            MIN_BASE_FEE,
+        )
+        .unwrap();
 
         let op_chain_spec = jovian_chainspec();
 

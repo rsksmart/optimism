@@ -6,9 +6,9 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 )
 
 type L1Config struct {
@@ -80,8 +80,6 @@ type L2Config struct {
 	DisputeSplitDepth           uint64
 	DisputeClockExtension       uint64
 	DisputeMaxClockDuration     uint64
-	// TODO(#20084): remove once L2CM is the default codepath and DevFeatures are removed.
-	UseL2CM bool
 }
 
 func (c *L2Config) Check(log log.Logger) error {

@@ -14,12 +14,12 @@ import (
 
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/utils"
 	"github.com/ethereum-optimism/optimism/op-challenger/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
+	"github.com/ethereum-optimism/optimism/op-service/log"
 )
 
 const (
@@ -60,28 +60,23 @@ type Config struct {
 	L1GenesisPath     string
 	L2GenesisPaths    []string
 	DepsetConfigPath  string
-
-	// EnableExperimentalWitnessEndpoint enables kona's L2PayloadWitness hint,
-	// which uses debug_executePayload to collect execution witnesses.
-	// This can reduce proof generation time by avoiding full block re-derivation
-	// and re-execution. Requires an execution client with debug_executePayload
-	// support (e.g., op-reth).
-	EnableExperimentalWitnessEndpoint bool
 }
 
-func (c *Config) Check() error {
+func (c *Config) Check(requireServer bool) error {
 	if c.VmBin == "" {
 		return ErrMissingBin
 	}
-	if c.Server == "" {
+	if requireServer && c.Server == "" {
 		return ErrMissingServer
 	}
 
 	if _, err := os.Stat(c.VmBin); err != nil {
 		return fmt.Errorf("%w: %w", ErrMissingBin, err)
 	}
-	if _, err := os.Stat(c.Server); err != nil {
-		return fmt.Errorf("%w: %w", ErrMissingServer, err)
+	if requireServer {
+		if _, err := os.Stat(c.Server); err != nil {
+			return fmt.Errorf("%w: %w", ErrMissingServer, err)
+		}
 	}
 
 	if len(c.Networks) == 0 {

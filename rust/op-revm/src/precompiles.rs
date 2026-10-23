@@ -9,9 +9,9 @@ use revm::{
         self, EthPrecompileResult, Precompile, PrecompileHalt, PrecompileId, Precompiles, bn254,
         eth_precompile_fn, modexp, secp256r1,
     },
-    primitives::{Address, OnceLock, hardfork::SpecId},
+    primitives::{Address, AddressSet, OnceLock, hardfork::SpecId},
 };
-use std::{boxed::Box, string::String};
+use std::string::String;
 
 /// Optimism precompile provider
 #[derive(Debug, Clone)]
@@ -35,7 +35,7 @@ impl OpPrecompiles {
             OpSpecId::GRANITE | OpSpecId::HOLOCENE => granite(),
             OpSpecId::ISTHMUS => isthmus(),
             OpSpecId::JOVIAN => jovian(),
-            OpSpecId::KARST | OpSpecId::INTEROP => karst(),
+            OpSpecId::KARST | OpSpecId::LAGOON => karst(),
         };
 
         Self { inner: EthPrecompiles { precompiles, spec: SpecId::default() }, spec }
@@ -48,6 +48,10 @@ impl OpPrecompiles {
     }
 }
 
+/// UPSTREAM-MIRROR(set): revm-precompile@42.0.1 `revm_precompile::Precompiles`
+///
+/// Fjord extends the upstream Cancun set with P256 verification. Re-check the
+/// inherited address set and gas parameters on each bump.
 /// Returns precompiles for Fjord spec.
 pub fn fjord() -> &'static Precompiles {
     static INSTANCE: OnceLock<Precompiles> = OnceLock::new();
@@ -59,6 +63,9 @@ pub fn fjord() -> &'static Precompiles {
     })
 }
 
+/// UPSTREAM-MIRROR(set): revm-precompile@42.0.1 `revm_precompile::Precompiles`
+///
+/// Granite replaces the inherited pairing implementation.
 /// Returns precompiles for Granite spec.
 pub fn granite() -> &'static Precompiles {
     static INSTANCE: OnceLock<Precompiles> = OnceLock::new();
@@ -70,6 +77,9 @@ pub fn granite() -> &'static Precompiles {
     })
 }
 
+/// UPSTREAM-MIRROR(set): revm-precompile@42.0.1 `revm_precompile::Precompiles`
+///
+/// Isthmus extends the inherited set with Prague BLS precompiles and OP pricing.
 /// Returns precompiles for isthmus spec.
 pub fn isthmus() -> &'static Precompiles {
     static INSTANCE: OnceLock<Precompiles> = OnceLock::new();
@@ -87,6 +97,9 @@ pub fn isthmus() -> &'static Precompiles {
     })
 }
 
+/// UPSTREAM-MIRROR(set): revm-precompile@42.0.1 `revm_precompile::Precompiles`
+///
+/// Karst replaces the inherited Osaka-sensitive precompiles.
 /// Returns precompiles for karst spec.
 pub fn karst() -> &'static Precompiles {
     static INSTANCE: OnceLock<Precompiles> = OnceLock::new();
@@ -104,6 +117,9 @@ pub fn karst() -> &'static Precompiles {
     })
 }
 
+/// UPSTREAM-MIRROR(set): revm-precompile@42.0.1 `revm_precompile::Precompiles`
+///
+/// Jovian replaces variable-input precompiles in the inherited set.
 /// Returns precompiles for jovian spec.
 pub fn jovian() -> &'static Precompiles {
     static INSTANCE: OnceLock<Precompiles> = OnceLock::new();
@@ -157,7 +173,7 @@ where
     }
 
     #[inline]
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
+    fn warm_addresses(&self) -> &AddressSet {
         self.inner.warm_addresses()
     }
 

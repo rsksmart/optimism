@@ -1,10 +1,11 @@
-use crate::{InvalidCrossTx, OpPooledTx, supervisor::SupervisorClient};
+use crate::{InvalidCrossTx, OpPooledTx, interop_filter::InteropFilterClient};
 use alloy_consensus::{BlockHeader, Transaction};
-use op_revm::L1BlockInfo;
+use alloy_primitives::U256;
+use op_revm::{L1BlockInfo, OpSpecId};
 use parking_lot::RwLock;
 use reth_chainspec::ChainSpecProvider;
 use reth_evm::ConfigureEvm;
-use reth_optimism_evm::RethL1BlockInfo;
+use reth_optimism_evm::{RethL1BlockInfo, revm_spec_by_timestamp_after_bedrock};
 use reth_optimism_forks::OpHardforks;
 use reth_primitives_traits::{
     Block, BlockBody, BlockTy, GotExpected, SealedBlock,
@@ -13,15 +14,23 @@ use reth_primitives_traits::{
 use reth_storage_api::{AccountInfoReader, BlockReaderIdExt, StateProviderFactory};
 use reth_transaction_pool::{
     EthPoolTransaction, EthTransactionValidator, TransactionOrigin, TransactionValidationOutcome,
-    TransactionValidator, error::InvalidPoolTransactionError,
+    TransactionValidator, error::InvalidPoolTransactionError, validate::ValidTransaction,
 };
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-/// The timeout for cross-chain transaction validation against the supervisor/interop-filter.
+/// The timeout for cross-chain transaction validation against the interop filter.
 pub(crate) const CHECK_ACCESS_LIST_TIMEOUT_SECS: u64 = 7200;
+
+/// Gas reserved on every L2 block for the L1-info deposit transaction.
+///
+/// The L1-info deposit is injected as the first transaction of every OP block and always
+/// consumes some gas, so a non-deposit transaction can never use the full block gas limit.
+/// Mirrors op-geth's `l1InfoGasOverhead` (`core/txpool/validation.go`) so the tx-pool does not
+/// admit transactions that could never be included.
+pub(crate) const L1_INFO_GAS_OVERHEAD: u64 = 70_000;
 
 /// Tracks additional infos for the current block.
 #[derive(Debug, Default)]
@@ -50,8 +59,8 @@ pub struct OpTransactionValidator<Client, Tx, Evm> {
     /// derived from the tracked L1 block info that is extracted from the first transaction in the
     /// L2 block.
     require_l1_data_gas_fee: bool,
-    /// Client used to check transaction validity with op-supervisor
-    supervisor_client: Option<SupervisorClient>,
+    /// Client used to check transaction validity with the interop filter.
+    interop_client: Option<InteropFilterClient>,
     /// tracks activated forks relevant for transaction validation
     fork_tracker: Arc<OpForkTracker>,
 }
@@ -95,6 +104,11 @@ where
     Tx: EthPoolTransaction + OpPooledTx,
     Evm: ConfigureEvm,
 {
+    /// Returns the most recent block gas limit seen by the validator.
+    pub fn block_gas_limit(&self) -> u64 {
+        self.inner.block_gas_limit()
+    }
+
     /// Create a new [`OpTransactionValidator`].
     pub fn new(inner: EthTransactionValidator<Client, Tx, Evm>) -> Self {
         let this = Self::with_block_info(inner, OpL1BlockInfo::default());
@@ -122,14 +136,14 @@ where
             inner: Arc::new(inner),
             block_info: Arc::new(block_info),
             require_l1_data_gas_fee: true,
-            supervisor_client: None,
+            interop_client: None,
             fork_tracker: Arc::new(OpForkTracker { interop: AtomicBool::from(false) }),
         }
     }
 
-    /// Set the supervisor client and safety level
-    pub fn with_supervisor(mut self, supervisor_client: SupervisorClient) -> Self {
-        self.supervisor_client = Some(supervisor_client);
+    /// Sets the interop filter client and safety level.
+    pub fn with_interop(mut self, interop_client: InteropFilterClient) -> Self {
+        self.interop_client = Some(interop_client);
         self
     }
 
@@ -190,6 +204,27 @@ where
             );
         }
 
+        // Reserve gas for the L1-info deposit that is present in every OP block, mirroring
+        // op-geth's `EffectiveGasLimit` (`core/txpool/validation.go`). The L1-info deposit is
+        // injected as the first transaction of every block and always consumes some gas, so a
+        // non-deposit transaction can never use the full block gas limit. The inner validator
+        // caps at the full block gas limit, which would admit a transaction in
+        // `(block_gas_limit - L1_INFO_GAS_OVERHEAD, block_gas_limit]` that can never be included
+        // (it would sit in the pool until it expires). Reject it up front, as op-geth does.
+        //
+        // This is done before the interop `is_valid_cross_tx` check below: the gas check is cheap,
+        // stateless and deterministic, whereas cross-tx validation is `async` and potentially
+        // network-bound (access-list filtering, up to `CHECK_ACCESS_LIST_TIMEOUT_SECS`). Rejecting
+        // an over-gas-limit transaction here avoids that work and is better admission-DoS hygiene.
+        let gas_limit = transaction.gas_limit();
+        let effective_gas_limit = self.inner.block_gas_limit().saturating_sub(L1_INFO_GAS_OVERHEAD);
+        if gas_limit > effective_gas_limit {
+            return TransactionValidationOutcome::Invalid(
+                transaction,
+                InvalidPoolTransactionError::ExceedsGasLimit(gas_limit, effective_gas_limit),
+            );
+        }
+
         // Interop cross tx validation
         match self.is_valid_cross_tx(&transaction).await {
             Some(Err(err)) => {
@@ -227,7 +262,7 @@ where
         if let TransactionValidationOutcome::Valid {
             balance,
             state_nonce,
-            transaction: valid_tx,
+            transaction: mut valid_tx,
             propagate,
             bytecode_hash,
             authorities,
@@ -237,7 +272,7 @@ where
 
             let encoded = valid_tx.transaction().encoded_2718();
 
-            let cost_addition = match l1_block_info.l1_tx_data_fee(
+            let mut cost_addition = match l1_block_info.l1_tx_data_fee(
                 self.chain_spec(),
                 self.block_timestamp(),
                 &encoded,
@@ -248,7 +283,36 @@ where
                     return TransactionValidationOutcome::Error(*valid_tx.hash(), Box::new(err));
                 }
             };
-            let cost = valid_tx.transaction().cost().saturating_add(cost_addition);
+
+            // Also reserve the operator fee (introduced in Isthmus). The Isthmus exec-engine spec
+            // mandates this pool behavior: "the transaction pool must reject transactions that do
+            // not have enough balance to cover the worst-case cost of the transaction fee. This
+            // worst-case cost of a transaction now includes the worst-case operator fee."
+            // <https://specs.optimism.io/protocol/isthmus/exec-engine.html#operator-fee>
+            // (Jovian changes the formula: <https://specs.optimism.io/protocol/jovian/exec-engine.html#operator-fee>.)
+            // Reserving only the L1 data fee above lets a sender covering L2 gas + value + L1 data
+            // fee — but not the operator fee — be admitted to the pool and then fail at execution.
+            let spec_id =
+                revm_spec_by_timestamp_after_bedrock(self.chain_spec(), self.block_timestamp());
+            cost_addition = cost_addition.saturating_add(operator_fee_addition(
+                &l1_block_info,
+                spec_id,
+                &encoded,
+                valid_tx.transaction().gas_limit(),
+            ));
+
+            // Fold the OP fees into `cost()` so the pool's cumulative per-sender balance check
+            // accounts for them too. This check only sees one transaction against the on-chain
+            // balance; a sender's later nonces must also cover the OP fees of the earlier ones, or
+            // the pool marks them pending although execution rejects them for insufficient funds.
+            // The fees are priced at admission.
+            match &mut valid_tx {
+                ValidTransaction::Valid(tx) |
+                ValidTransaction::ValidWithSidecar { transaction: tx, .. } => {
+                    tx.set_op_fee_reservation(cost_addition)
+                }
+            }
+            let cost = *valid_tx.transaction().cost();
 
             // Checks for max cost
             if cost > balance {
@@ -277,7 +341,7 @@ where
     pub async fn is_valid_cross_tx(&self, tx: &Tx) -> Option<Result<(), InvalidCrossTx>> {
         // We don't need to check for deposit transaction in here, because they won't come from
         // txpool
-        self.supervisor_client
+        self.interop_client
             .as_ref()?
             .is_valid_cross_tx(
                 tx.access_list(),
@@ -290,6 +354,11 @@ where
     }
 }
 
+/// UPSTREAM-MIRROR(delegate): reth@rev:0fbe428
+/// `reth_transaction_pool::validate::EthTransactionValidator`
+///
+/// Wraps the Ethereum validator. Re-check newly defaulted batch methods and upstream overrides;
+/// inheriting a generic default can lose the inner validator's shared-state batching.
 impl<Client, Tx, Evm> TransactionValidator for OpTransactionValidator<Client, Tx, Evm>
 where
     Client:
@@ -325,8 +394,215 @@ pub(crate) struct OpForkTracker {
 }
 
 impl OpForkTracker {
-    /// Returns `true` if Interop fork is activated.
+    /// Returns `true` if Lagoon fork is activated.
     pub(crate) fn is_interop_activated(&self) -> bool {
         self.interop.load(Ordering::Relaxed)
+    }
+}
+
+/// Operator fee to reserve for a non-deposit transaction in the tx-pool balance check.
+///
+/// Implements the pool-admission rule from the Isthmus exec-engine spec (the pool must reserve the
+/// worst-case operator fee): <https://specs.optimism.io/protocol/isthmus/exec-engine.html#operator-fee>.
+/// The charge delegates to [`L1BlockInfo::operator_fee_charge`], so the fork-dependent formula
+/// (Isthmus vs the Jovian 100× multiplier,
+/// <https://specs.optimism.io/protocol/jovian/exec-engine.html#operator-fee>) stays in one place.
+/// `apply_op_checks` otherwise reserves only the L1 data fee, so a sender covering L2 gas + value +
+/// L1 data fee — but not the operator fee — would be admitted to the pool and then fail at
+/// execution.
+///
+/// Returns zero before Isthmus or when the operator fee params are unset:
+/// [`L1BlockInfo::operator_fee_charge`] panics on a missing scalar/constant, so both must be
+/// present before the charge is computed. Uses the transaction's `gas_limit` (worst-case spend),
+/// matching the spec's worst-case reservation.
+fn operator_fee_addition(
+    l1_block_info: &L1BlockInfo,
+    spec_id: OpSpecId,
+    encoded: &[u8],
+    gas_limit: u64,
+) -> U256 {
+    if spec_id.is_enabled_in(OpSpecId::ISTHMUS) &&
+        l1_block_info.operator_fee_scalar.is_some() &&
+        l1_block_info.operator_fee_constant.is_some()
+    {
+        l1_block_info.operator_fee_charge(encoded, U256::from(gas_limit), spec_id)
+    } else {
+        U256::ZERO
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::operator_fee_addition;
+    use alloy_primitives::U256;
+    use op_revm::{L1BlockInfo, OpSpecId};
+
+    /// A non-deposit EIP-2718 encoding: first byte is a tx-type (0x02 = EIP-1559), not the `0x7E`
+    /// deposit marker, and non-empty — so `operator_fee_charge` does not short-circuit.
+    const NON_DEPOSIT_ENCODED: &[u8] = &[0x02, 0xAB, 0xCD];
+
+    fn l1_info_with_operator_fee(scalar: u64, constant: u64) -> L1BlockInfo {
+        L1BlockInfo {
+            operator_fee_scalar: Some(U256::from(scalar)),
+            operator_fee_constant: Some(U256::from(constant)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn operator_fee_added_when_isthmus_and_params_present() {
+        let l1 = l1_info_with_operator_fee(1, 2);
+        let gas_limit = 21_000u64;
+        let expected =
+            l1.operator_fee_charge(NON_DEPOSIT_ENCODED, U256::from(gas_limit), OpSpecId::ISTHMUS);
+        assert!(expected > U256::ZERO);
+        assert_eq!(
+            operator_fee_addition(&l1, OpSpecId::ISTHMUS, NON_DEPOSIT_ENCODED, gas_limit),
+            expected
+        );
+    }
+
+    #[test]
+    fn operator_fee_uses_jovian_formula_in_jovian() {
+        // Jovian changes the operator fee formula (`gas × scalar × 100 + constant`) from the
+        // Isthmus one (`gas × scalar ÷ 1e6 + constant`) — a ~100× difference for the same params.
+        // The reservation passes `spec_id` straight through to `operator_fee_charge`, so this pins
+        // it to the fork: if the delegation ever drifts, the Jovian path here breaks.
+        // <https://specs.optimism.io/protocol/jovian/exec-engine.html#operator-fee>
+        let l1 = l1_info_with_operator_fee(1, 2);
+        let gas_limit = 21_000u64;
+
+        let expected =
+            l1.operator_fee_charge(NON_DEPOSIT_ENCODED, U256::from(gas_limit), OpSpecId::JOVIAN);
+        assert_eq!(
+            operator_fee_addition(&l1, OpSpecId::JOVIAN, NON_DEPOSIT_ENCODED, gas_limit),
+            expected
+        );
+
+        // Same params, higher fork: Jovian's multiplier makes the reservation strictly larger than
+        // Isthmus — so a fork mix-up can't go unnoticed.
+        let isthmus = operator_fee_addition(&l1, OpSpecId::ISTHMUS, NON_DEPOSIT_ENCODED, gas_limit);
+        assert!(
+            expected > isthmus,
+            "Jovian reservation ({expected}) must exceed Isthmus ({isthmus}) for the same params"
+        );
+    }
+
+    #[test]
+    fn operator_fee_zero_before_isthmus() {
+        // Params present but spec pre-Isthmus → op-geth charges no operator fee.
+        let l1 = l1_info_with_operator_fee(1, 2);
+        assert_eq!(
+            operator_fee_addition(&l1, OpSpecId::BEDROCK, NON_DEPOSIT_ENCODED, 21_000),
+            U256::ZERO
+        );
+    }
+
+    #[test]
+    fn operator_fee_zero_and_no_panic_when_params_unset() {
+        // Pre-Isthmus L1 info has no operator fee params; `operator_fee_charge` would panic on the
+        // missing scalar/constant, so the guard must return zero without calling it.
+        let l1 = L1BlockInfo::default();
+        assert!(l1.operator_fee_scalar.is_none() && l1.operator_fee_constant.is_none());
+        assert_eq!(
+            operator_fee_addition(&l1, OpSpecId::ISTHMUS, NON_DEPOSIT_ENCODED, 21_000),
+            U256::ZERO
+        );
+    }
+
+    #[test]
+    fn operator_fee_zero_for_deposit_input() {
+        // A deposit-typed (0x7E) encoding is exempt from the operator fee.
+        let l1 = l1_info_with_operator_fee(1, 2);
+        assert_eq!(
+            operator_fee_addition(&l1, OpSpecId::ISTHMUS, &[0x7E, 0x00], 21_000),
+            U256::ZERO
+        );
+    }
+
+    /// The pool must classify a sender's consecutive nonces against the full OP cost, not just the
+    /// L2 `cost()`. Each tx below is affordable on its own (so both pass admission against the same
+    /// on-chain balance), but the sender cannot pay the L1 data fee of both. Without the L1 fee in
+    /// the pool's cumulative accounting, nonce 1 is marked pending and the payload builder retries
+    /// it every block, failing with insufficient funds.
+    #[tokio::test]
+    async fn pool_parks_descendant_unaffordable_with_l1_fee() {
+        use crate::{OpL1BlockInfo, OpPooledTransaction, OpTransactionValidator};
+        use alloy_consensus::{SignableTransaction, TxEip1559, transaction::Recovered};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_primitives::{Address, Signature, TxKind};
+        use parking_lot::RwLock;
+        use reth_optimism_chainspec::OP_MAINNET;
+        use reth_optimism_evm::{OpEvmConfig, RethL1BlockInfo};
+        use reth_optimism_primitives::{OpPrimitives, OpTransactionSigned};
+        use reth_provider::test_utils::{ExtendedAccount, MockEthProvider};
+        use reth_transaction_pool::{
+            CoinbaseTipOrdering, Pool, PoolConfig, PoolTransaction, TransactionOrigin,
+            TransactionPool, blobstore::InMemoryBlobStore,
+            validate::EthTransactionValidatorBuilder,
+        };
+        use std::sync::atomic::AtomicU64;
+
+        let signer = Address::with_last_byte(1);
+        let make_tx = |nonce: u64| -> OpPooledTransaction {
+            let tx: OpTransactionSigned = TxEip1559 {
+                chain_id: 10,
+                nonce,
+                gas_limit: 21_000,
+                max_fee_per_gas: 1_000_000_000,
+                to: TxKind::Call(Address::with_last_byte(0x42)),
+                ..Default::default()
+            }
+            .into_signed(Signature::test_signature())
+            .into();
+            let recovered = Recovered::new_unchecked(tx, signer);
+            let len = recovered.encode_2718_len();
+            OpPooledTransaction::new(recovered, len)
+        };
+        let (tx0, tx1) = (make_tx(0), make_tx(1));
+
+        let mut l1_block_info = L1BlockInfo {
+            l1_base_fee: U256::from(1_000_000_000_000u64),
+            l1_base_fee_scalar: U256::from(1_000_000),
+            ..Default::default()
+        };
+        let l1_fee =
+            l1_block_info.l1_tx_data_fee(OP_MAINNET.clone(), 0, tx0.encoded_2718(), false).unwrap();
+        let l2_cost = *tx0.cost();
+        assert!(l1_fee > l2_cost, "test needs the L1 fee to dominate, as on ink-mainnet");
+
+        // Covers either tx alone (and both txs' L2 cost), but not both txs' full OP cost.
+        let balance = l2_cost * U256::from(2) + l1_fee + l1_fee / U256::from(2);
+
+        let client = MockEthProvider::<OpPrimitives>::new()
+            .with_chain_spec(OP_MAINNET.clone())
+            .with_genesis_block();
+        client.add_account(signer, ExtendedAccount::new(0, balance));
+        let inner =
+            EthTransactionValidatorBuilder::new(client, OpEvmConfig::optimism(OP_MAINNET.clone()))
+                .build(InMemoryBlobStore::default());
+        let validator = OpTransactionValidator::with_block_info(
+            inner,
+            OpL1BlockInfo {
+                l1_block_info: RwLock::new(l1_block_info),
+                timestamp: AtomicU64::new(0),
+            },
+        );
+        let pool = Pool::new(
+            validator,
+            CoinbaseTipOrdering::default(),
+            InMemoryBlobStore::default(),
+            PoolConfig::default(),
+        );
+
+        pool.add_transaction(TransactionOrigin::External, tx0).await.unwrap();
+        pool.add_transaction(TransactionOrigin::External, tx1).await.unwrap();
+
+        let pending: Vec<_> =
+            pool.get_pending_transactions_by_sender(signer).iter().map(|tx| tx.nonce()).collect();
+        let queued: Vec<_> =
+            pool.get_queued_transactions_by_sender(signer).iter().map(|tx| tx.nonce()).collect();
+        assert_eq!(pending, vec![0], "only nonce 0 is executable");
+        assert_eq!(queued, vec![1], "nonce 1 cannot cover its L1 data fee after nonce 0");
     }
 }
