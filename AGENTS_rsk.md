@@ -46,11 +46,13 @@ wherever they conflict.** Read this before acting on anything in those files.
 - **Write the PR body to the structure in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).**
   `gh pr create --body` replaces the whole body, so GitHub's own template
   auto-fill (web UI, `gh pr create` without `--body`) never kicks in — match
-  its sections yourself.
+  its sections yourself, copying every checklist line verbatim: the
+  `rsk-pr-checklist` check matches the text exactly.
 - **Never tick a checklist box in that template**, even one you actually ran
   (`/simplify`, `/code-review`, `/security-review`, diff reviewed, etc.).
   Those are the human's own attestation, not a record that the step exists.
-  Leave every box `[ ]`; they tick them.
+  Leave every box `[ ]`; they tick them. The `rsk-pr-checklist` check stays
+  red until every box of the template on the base branch is ticked.
 
 ## Merge model
 

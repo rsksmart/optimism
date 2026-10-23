@@ -25,6 +25,8 @@ risk/high:
           # The regression guard for everything above: weakening it hides the
           # breakage the rest of this list exists to catch.
           - ".github/workflows/rsk-test.yml"
+          # The merge gate on the template checkboxes.
+          - ".github/workflows/rsk-pr-checklist.yml"
           # The triager itself: a change to what counts as risky is the control,
           # not plumbing.
           - ".github/workflows/rsk-pr-triager.yml"

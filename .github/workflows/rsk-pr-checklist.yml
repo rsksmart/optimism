@@ -1,0 +1,72 @@
+# Enforce the PR template checkboxes. A PR cannot merge while any box of the
+# template is missing from the PR body or unticked: the author's "Before you open
+# this", the reviewer's "For the reviewer" and the merger's "For the merger". The
+# check reads the raw text of the PR body, not who ticked a box or how the page
+# renders it, so a ticked box inside a code fence or an HTML comment still counts,
+# and any unticked box anywhere in the body blocks, even one that is not in the
+# template.
+# (Only rsk/** bases; the develop/main upstream mirrors are intentionally excluded.)
+#
+# Ticking a box edits the body, which fires `edited` and re-runs the check.
+# Drafts skip it, so the gate applies once the PR is ready for review.
+name: rsk-pr-checklist
+
+# Run only this protected workflow, without checking out or executing PR code.
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [rsk/**]
+
+permissions:
+  contents: read # the template on the base branch
+  pull-requests: read # the PR body
+
+# Each ticked box fires `edited`. Only the newest run's result matters.
+concurrency:
+  group: rsk-pr-checklist-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checklist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate the template checkboxes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Re-runs replay the original event, so read the current draft state,
+          # body and base SHA together from the API.
+          pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
+          if [ "$(jq -r .draft <<<"$pr_json")" = true ] ||
+             [ "$(jq -r .user.login <<<"$pr_json")" = 'dependabot[bot]' ]; then
+            echo "ok: draft or Dependabot PR, no template to check"
+            exit 0
+          fi
+          PR_BODY=$(jq -r '.body // ""' <<<"$pr_json")
+          BASE_SHA=$(jq -r .base.sha <<<"$pr_json")
+
+          # Read from the base branch, so a PR cannot drop a box by editing the
+          # template it is checked against.
+          gh api -H 'Accept: application/vnd.github.raw' \
+            "repos/$GITHUB_REPOSITORY/contents/.github/PULL_REQUEST_TEMPLATE.md?ref=$BASE_SHA" \
+            >"$RUNNER_TEMP/template.md"
+
+          # Every template box must appear ticked in the body with the same text,
+          # and any unticked box in the body blocks. The \r strip covers CRLF
+          # bodies edited in a browser.
+          awk '
+            { sub(/[ \t\r]+$/, "") }
+            NR == FNR { if (sub(/^- \[ \] /, "")) { want[$0] = 1; n++ }; next }
+            sub(/^- \[[xX]\] /, "") { delete want[$0]; next }
+            sub(/^[ \t>]*([-*+]|[0-9]+[.)])[ \t]+\[ \][ \t]*/, "") { print "::error::unticked: " $0; delete want[$0]; bad = 1; next }
+            END {
+              if (!n) { print "::error::the template on the base branch has no checkboxes"; exit 1 }
+              for (t in want) { print "::error::missing: " t; bad = 1 }
+              if (!bad) print "ok: every template checkbox is ticked"
+              exit bad
+            }
+          ' "$RUNNER_TEMP/template.md" - <<<"$PR_BODY"
