@@ -50,7 +50,8 @@ wherever they conflict.** Read this before acting on anything in those files.
 - **Never tick a checklist box in that template**, even one you actually ran
   (`/simplify`, `/code-review`, `/security-review`, diff reviewed, etc.).
   Those are the human's own attestation, not a record that the step exists.
-  Leave every box `[ ]`; they tick them.
+  Leave every box `[ ]`; they tick them. See [the checklist gate](docs/rsk-pr-checklist.md)
+  for pending status, exemptions and activation.
 
 ## Merge model
 

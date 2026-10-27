@@ -1,0 +1,75 @@
+# Only trusted workflow code runs. Never check out PR code.
+name: rsk-pr-checklist
+
+on:
+  pull_request_target:
+    branches: [rsk/**]
+    types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
+    branches: [rsk/**]
+    types: [checks_requested]
+
+permissions:
+  pull-requests: read
+  statuses: write
+
+# Serialize updates for each PR and read its latest description when the run starts.
+concurrency:
+  group: rsk-pr-checklist-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  checklist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish checklist status
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const queued = context.eventName === 'merge_group';
+            const sha = queued
+              ? context.payload.merge_group.head_sha
+              : context.payload.pull_request.head.sha;
+            const status = {
+              ...context.repo,
+              sha,
+              context: 'PR checklist',
+              target_url: `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            };
+
+            if (!queued && context.payload.pull_request.user.login === 'dependabot[bot]') {
+              await github.rest.repos.createCommitStatus({
+                ...status,
+                state: 'success',
+                description: 'Dependabot is exempt',
+              });
+              return;
+            }
+
+            // Invalidate earlier success before any API reads or checklist evaluation.
+            await github.rest.repos.createCommitStatus({
+              ...status,
+              state: 'pending',
+              description: 'Waiting for checklist completion',
+            });
+
+            if (!queued) {
+              const { data: pr } = await github.rest.pulls.get({
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+              });
+              // A newer synchronize event owns the new head's status.
+              if (pr.head.sha !== sha) return;
+              const unchecked = /^[ \t>]*(?:[-*+]|[0-9]+[.)])[ \t]+\[ \](?:[ \t\r]|$)/m;
+              if (!pr.draft && unchecked.test(pr.body ?? '')) {
+                return;
+              }
+            }
+
+            // Merge groups rely on the required check before queue entry.
+            await github.rest.repos.createCommitStatus({
+              ...status,
+              state: 'success',
+              description: queued ? 'Checklist accepted before queue entry' : 'Checklist complete or exempt',
+            });
