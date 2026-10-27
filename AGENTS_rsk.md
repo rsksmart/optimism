@@ -65,9 +65,19 @@ wherever they conflict.** Read this before acting on anything in those files.
 - In this fork: **inline `IsRSKChain`-gated patches** (the `Apply*RSK` hooks)
   within upstream files. Keep them minimal and gated.
 - **Not** in this fork: the `gorsk/` primitives and `rsk/trie` adapter live in
-  the **opRSK** repo; op-geth is consumed **unmodified**.
-- Prefer adding RSK logic to **opRSK** over patching upstream files here — it
+  the **rootstack** repo; op-geth is consumed **unmodified**.
+- Prefer adding RSK logic to **rootstack** over patching upstream files here — it
   keeps the fork thin and upstream syncs clean.
+
+## Images and releases
+
+- This fork publishes no images and no release artifacts. rootstack builds the
+  contracts and the `oprsk-*` images from the pinned submodule of this repo,
+  and publishes the node, batcher, proposer and challenger images (no deployer
+  image is released).
+- No fork workflow builds `ops/docker/**` or `docker-bake.hcl`. A fork image
+  could not run on RSK anyway, because the hook implementations are registered
+  from rootstack.
 
 ## Patch style: stay close to upstream
 
@@ -166,8 +176,9 @@ the code.
   upstream's, **prefixed `rsk-`** — the filename (`rsk-<thing>.yml`) and the
   `name:` field. This flags them as RSK-owned and avoids filename collisions on
   upstream sync (a workflow upstream would call `foo.yml` we add as `rsk-foo.yml`).
-- Scope triggers to the RSK surface — e.g. `branches: [rsk/**]` /
-  `tags: ['rsk/**']` — so upstream's `develop`/`main` mirrors aren't affected.
+- Scope triggers to the RSK branches, e.g. `branches: [rsk/**]`, so upstream's
+  `develop`/`main` mirrors aren't affected. No fork workflow runs on tags: the
+  fork has no release flow (see *Images and releases*).
 - **Pin every third-party action to a full commit SHA**, with the version as a
   trailing comment (`uses: actions/checkout@<sha> # v4`) — never a mutable tag
   (`@v4`, `@main`). A tag can be repointed at malicious code; a commit SHA can't.

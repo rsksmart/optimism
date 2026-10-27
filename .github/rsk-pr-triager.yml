@@ -20,8 +20,6 @@ risk/high:
           # Foundry. Less covered by CI, not less risky.
           - "op-deployer/pkg/deployer/forge/**"
           - "packages/contracts-rootstock/**"
-          - ".github/workflows/rsk-release.yml"
-          - ".github/workflows/rsk-release-module.yml"
           # The regression guard for everything above: weakening it hides the
           # breakage the rest of this list exists to catch.
           - ".github/workflows/rsk-test.yml"
