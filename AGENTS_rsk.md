@@ -75,9 +75,9 @@ wherever they conflict.** Read this before acting on anything in those files.
   contracts and the `oprsk-*` images from the pinned submodule of this repo,
   and publishes the node, batcher, proposer and challenger images (no deployer
   image is released).
-- `ops/docker/**` and `docker-bake.hcl` are upstream-only here: no fork
-  workflow builds them. A fork image could not run on RSK anyway, because the
-  hook implementations are registered from rootstack.
+- No fork workflow builds `ops/docker/**` or `docker-bake.hcl`. A fork image
+  could not run on RSK anyway, because the hook implementations are registered
+  from rootstack.
 
 ## Patch style: stay close to upstream
 
