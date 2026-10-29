@@ -362,6 +362,8 @@ type CLIConfig struct {
 	WrapBackend func(ETHBackend) ETHBackend
 	// PrepareBackoff is forwarded to Config.PrepareBackoff. See its docs there.
 	PrepareBackoff func(attempt int, err error) time.Duration
+
+	SignerFactoryFn func() (opcrypto.SignerFactory, common.Address, error)
 }
 
 func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
@@ -443,8 +445,8 @@ func (m CLIConfig) Check() error {
 		}
 		return sum == 1 || sum == 0
 	}
-	if !atMostOneIsSet(m.PrivateKey != "", m.Mnemonic != "", m.SignerCLIConfig.Enabled()) {
-		return errors.New("can only provide at most one of: [private key, mnemonic, remote signer]")
+	if !atMostOneIsSet(m.PrivateKey != "", m.Mnemonic != "", m.SignerCLIConfig.Enabled(), m.SignerFactoryFn != nil) {
+		return errors.New("can only provide at most one of: [private key, mnemonic, remote signer, signer factory]")
 	}
 
 	return nil
@@ -511,7 +513,18 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		hdPath = cfg.L2OutputHDPath
 	}
 
-	signerFactory, from, err := opcrypto.SignerFactoryFromConfig(l, cfg.PrivateKey, cfg.Mnemonic, hdPath, cfg.SignerCLIConfig)
+	var signerFactory opcrypto.SignerFactory
+	var from common.Address
+	if cfg.SignerFactoryFn != nil {
+		signerFactory, from, err = cfg.SignerFactoryFn()
+		if err == nil && signerFactory == nil {
+			err = errors.New("SignerFactoryFn returned a nil signer factory")
+		} else if err == nil && from == (common.Address{}) {
+			err = errors.New("SignerFactoryFn returned the zero address")
+		}
+	} else {
+		signerFactory, from, err = opcrypto.SignerFactoryFromConfig(l, cfg.PrivateKey, cfg.Mnemonic, hdPath, cfg.SignerCLIConfig)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("could not init signer: %w", err)
 	}
