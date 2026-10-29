@@ -362,12 +362,7 @@ type CLIConfig struct {
 	WrapBackend func(ETHBackend) ETHBackend
 	// PrepareBackoff is forwarded to Config.PrepareBackoff. See its docs there.
 	PrepareBackoff func(attempt int, err error) time.Duration
-	// SignerFactoryFn optionally replaces the signer NewConfig builds from
-	// PrivateKey, Mnemonic or SignerCLIConfig, returning the factory and the
-	// address it signs for. nil keeps those signers. Used by non-Ethereum L1
-	// forks whose transactions the stock signers cannot produce (e.g. RSK legacy
-	// transactions signed through a KMS); it must not block, so resolve any
-	// remote state before installing it.
+
 	SignerFactoryFn func() (opcrypto.SignerFactory, common.Address, error)
 }
 
@@ -522,6 +517,11 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 	var from common.Address
 	if cfg.SignerFactoryFn != nil {
 		signerFactory, from, err = cfg.SignerFactoryFn()
+		if err == nil && signerFactory == nil {
+			err = errors.New("SignerFactoryFn returned a nil signer factory")
+		} else if err == nil && from == (common.Address{}) {
+			err = errors.New("SignerFactoryFn returned the zero address")
+		}
 	} else {
 		signerFactory, from, err = opcrypto.SignerFactoryFromConfig(l, cfg.PrivateKey, cfg.Mnemonic, hdPath, cfg.SignerCLIConfig)
 	}

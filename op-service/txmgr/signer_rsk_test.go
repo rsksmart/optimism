@@ -1,11 +1,5 @@
 package txmgr_test
 
-// RSK fork coverage for CLIConfig.SignerFactoryFn (cli.go): NewConfig takes
-// the signer and its address from the hook instead of building one from a
-// private key, mnemonic or remote signer, and Check treats the hook as one more
-// mutually exclusive signing method. Used to sign RSK legacy transactions
-// through a KMS, which upstream's remote-signer protocol cannot carry.
-
 import (
 	"context"
 	"errors"
@@ -28,7 +22,6 @@ import (
 
 const rskTestChainID = 33
 
-// rskChainIDAPI answers eth_chainId, the only L1 call NewConfig makes.
 type rskChainIDAPI struct{}
 
 func (rskChainIDAPI) ChainId() *hexutil.Big { return (*hexutil.Big)(big.NewInt(rskTestChainID)) }
@@ -91,8 +84,31 @@ func TestRSK_NewConfig_SignerFactoryFnErrorFailsConfig(t *testing.T) {
 	require.ErrorIs(t, err, hookErr)
 }
 
-// TestRSK_NewConfig_NilSignerFactoryFnKeepsStockSigner is the control: with
-// the hook unset, the private key decides the signing address as upstream does.
+func TestRSK_NewConfig_SignerFactoryFnNilFactoryFailsConfig(t *testing.T) {
+	cfg := rskCLIConfig(t)
+	cfg.SignerFactoryFn = func() (opcrypto.SignerFactory, common.Address, error) {
+		return nil, common.HexToAddress("0x00000000000000000000000000000000000000a1"), nil
+	}
+
+	_, err := txmgr.NewConfig(cfg, testlog.Logger(t, log.LevelCrit))
+	require.ErrorContains(t, err, "SignerFactoryFn returned a nil signer factory")
+}
+
+func TestRSK_NewConfig_SignerFactoryFnZeroAddressFailsConfig(t *testing.T) {
+	cfg := rskCLIConfig(t)
+	cfg.SignerFactoryFn = func() (opcrypto.SignerFactory, common.Address, error) {
+		factory := func(*big.Int) opcrypto.SignerFn {
+			return func(_ context.Context, _ common.Address, tx *types.Transaction) (*types.Transaction, error) {
+				return tx, nil
+			}
+		}
+		return factory, common.Address{}, nil
+	}
+
+	_, err := txmgr.NewConfig(cfg, testlog.Logger(t, log.LevelCrit))
+	require.ErrorContains(t, err, "SignerFactoryFn returned the zero address")
+}
+
 func TestRSK_NewConfig_NilSignerFactoryFnKeepsStockSigner(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	require.NoError(t, err)
