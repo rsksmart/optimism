@@ -17,6 +17,7 @@ import {ISuperchainConfig} from "interfaces/L1/ISuperchainConfig.sol";
 import {ISP1Verifier} from "interfaces/vendor/ISP1Verifier.sol";
 
 import {RSKOPCMSplitter} from "../../contracts/RSKOPCMSplitter.sol";
+import {RSKOPCMSplitterBase} from "../../contracts/RSKOPCMSplitterBase.sol";
 
 // LOAD-BEARING ARTIFACT IMPORTS: Bedrock deploy scripts load these concrete
 // sources by artifact name through DeployUtils.getCode/vm.getCode. Keep every
@@ -63,9 +64,9 @@ abstract contract RSKOPCTestBase is Test {
     DeployImplementations.Output internal implementationsOutput;
 
     RSKOPCMSplitter internal splitter;
-    RSKOPCMSplitter.FullConfig internal fullConfig;
+    RSKOPCMSplitterBase.FullConfig internal fullConfig;
     RSKOPCMSplitter.ChainContractsCore internal core;
-    RSKOPCMSplitter.ChainContracts internal chainContracts;
+    RSKOPCMSplitterBase.ChainContracts internal chainContracts;
 
     Types.DeployOPChainInput internal deployInput;
     ISuperchainConfig internal superchainConfig;
@@ -227,7 +228,7 @@ abstract contract RSKOPCTestBase is Test {
         chainContracts = splitter.deployStep1b_remainingProxies(fullConfig, core);
     }
 
-    function _runSplitter() internal returns (RSKOPCMSplitter.ChainContracts memory cts_) {
+    function _runSplitter() internal returns (RSKOPCMSplitterBase.ChainContracts memory cts_) {
         core = splitter.deployStep1a_coreProxies(fullConfig);
         cts_ = splitter.deployStep1b_remainingProxies(fullConfig, core);
         splitter.step2_systemConfigAndPortal(fullConfig, cts_);
