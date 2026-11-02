@@ -1,5 +1,54 @@
 # oprsk-contracts — F1 design plan
 
+## Status update (2026-10-30, upgrade path — F1.1)
+
+`contracts/RSKOPCMSplitterUpgrade.sol` upgrades an existing chain to the 9.0.2
+release: the RSK counterpart of `OPContractsManagerV2.upgrade`, rehearsed on a
+chain the 7.1.17 splitter deployed (PAYROLLUP-294).
+
+- `contracts/RSKOPCMSplitterBase.sol` holds what both contracts port: the
+  OPCMv2 binding, `_assertValidFullConfig` and `_apply` in four slices. The
+  deploy splitter's steps 2-4b and the upgrader call the same slices. The
+  deploy splitter lost the upgrade-sequence branch, which only an upgrade
+  reaches, and is 21,273 bytes deployed (3,303 bytes EIP-170 margin).
+- One transaction: the whole `_apply`, preceded by `upgradeSuperchain` when
+  the SuperchainConfig is behind. On the Ethereum gas schedule it uses
+  1.65-1.81 M adopting the existing lockbox and 2.23 M deploying a new one
+  (regtest chain forked at L1 block 384). The PoC's RSKj receipts are about
+  1.39 times its Ethereum-schedule gas for the same proxies, which puts the
+  upgrade near 2.5 M on RSKj, under the 6.8 M cap. Not measured on RSKj yet.
+- Called directly, not delegatecalled: the ProxyAdmin owners hand their
+  ProxyAdmins over, and the owners recorded at construction get them back in
+  the same transaction (`abort` returns them without upgrading). The
+  DisputeGameFactory is reinitialized with the upgrader as owner and returned
+  to the owner it had.
+- Addresses come from the SystemConfig, as upstream loads them. The 7.1.17
+  split deploy left an initialized ETHLockbox proxy the portal never used;
+  the RSK instruction `overrides.cts.ethLockbox` adopts it after checking it
+  belongs to the chain, and upstream's `PERMITTED_PROXY_DEPLOYMENT`
+  "ETHLockbox" deploys a new one instead.
+- Upgrade sequence: upstream's rule when `lastUsedOPCMVersion()` answers. On
+  chains the 7.1.17 splitter deployed it reverts (the splitter has no
+  `version()`); those are accepted while the SystemConfig is 3.14.2, straight
+  to 9.0.2, since the fork never had an OPCMv2 8.x.
+- Implementation immutables: the upgrade reverts if the 9.0.2 implementations
+  carry another proof maturity, dispute game finality or withdrawal delay, or
+  other depths and clocks for an output-root fault game the chain runs.
+- Keeps the PAYROLLUP-191 zero bond for PERMISSIONED_CANNON and regenerates
+  every game's args from the input.
+- 24,148 bytes deployed (428 bytes EIP-170 margin): a change that grows it
+  has to shrink something else.
+- Tests: `test/RSKOPCMSplitterUpgrade.t.sol` checks that it leaves the same
+  final state as a stock OPCMv2 `upgrade` delegatecalled by the ProxyAdmin
+  owner (every proxy starts on a copy of its implementation, so each slice
+  has state to move), plus every guard and an emulated 7.1.17 chain.
+  `test/RSKOPCMSplitterUpgradeFork.t.sol` is an opt-in dry run against a live
+  chain; its header lists the environment variables.
+
+Still missing: an upgrade mode in oprsk-deployer that deploys the 9.0.2
+implementations with the chain's values and drives this contract, and a CI
+gate that deploys with the previous pin and upgrades.
+
 ## Status update (2026-10-21, upstream op-node/v1.19.9 / OPContractsManagerV2 9.0.2)
 
 The splitter now mirrors `OPContractsManagerV2` 9.0.2, as `develop` ships it

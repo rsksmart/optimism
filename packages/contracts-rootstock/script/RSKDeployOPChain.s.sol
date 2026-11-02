@@ -59,6 +59,7 @@ import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
 import { GameType, GameTypes } from "src/dispute/lib/Types.sol";
 
 import { RSKOPCMSplitter } from "../contracts/RSKOPCMSplitter.sol";
+import { RSKOPCMSplitterBase } from "../contracts/RSKOPCMSplitterBase.sol";
 
 contract RSKDeployOPChain is Script {
     /// @notice Default init bond for the dispute games (matches upstream
@@ -145,7 +146,7 @@ contract RSKDeployOPChain is Script {
         IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_input.opcm);
 
         // Build the FullConfig identically to upstream `_toOPCMV2DeployInput`.
-        RSKOPCMSplitter.FullConfig memory cfg = _toFullConfig(_input, _initBond);
+        RSKOPCMSplitterBase.FullConfig memory cfg = _toFullConfig(_input, _initBond);
 
         // ----------- BROADCAST 1 — deploy the splitter -----------
         // The splitter checks `opcmV2`'s version and reads its utils and
@@ -160,7 +161,7 @@ contract RSKDeployOPChain is Script {
 
         // ----------- BROADCAST 3 — remaining proxies (2nd half of _loadChainContracts) -----------
         vm.broadcast(msg.sender);
-        RSKOPCMSplitter.ChainContracts memory cts = splitter.deployStep1b_remainingProxies(cfg, core);
+        RSKOPCMSplitterBase.ChainContracts memory cts = splitter.deployStep1b_remainingProxies(cfg, core);
 
         // ----------- BROADCAST 4 — SystemConfig + Portal + ETHLockbox -----------
         vm.broadcast(msg.sender);
@@ -204,14 +205,14 @@ contract RSKDeployOPChain is Script {
     // ---------------------------------------------------------------------
     // Conversion helpers — verbatim ports of upstream's _toOPCMV2DeployInput
     // and _fromOPCMV2OutputToOutput. The only divergence is the target type
-    // (RSKOPCMSplitter.FullConfig instead of IOPContractsManagerV2.FullConfig)
+    // (RSKOPCMSplitterBase.FullConfig instead of IOPContractsManagerV2.FullConfig)
     // — the field shapes are identical by construction.
     // ---------------------------------------------------------------------
 
     function _toFullConfig(Types.DeployOPChainInput memory _input, uint256 _initBond)
         internal
         pure
-        returns (RSKOPCMSplitter.FullConfig memory cfg_)
+        returns (RSKOPCMSplitterBase.FullConfig memory cfg_)
     {
         require(
             _input.disputeGameType.raw() == GameTypes.PERMISSIONED_CANNON.raw(),
@@ -225,7 +226,7 @@ contract RSKDeployOPChain is Script {
             challenger: _input.challenger
         });
 
-        // Order must match VALID_GAME_TYPES in RSKOPCMSplitter._assertValidFullConfig
+        // Order must match VALID_GAME_TYPES in RSKOPCMSplitterBase._assertValidFullConfig
         // (the same order upstream's OPContractsManagerV2 requires). RSK enables
         // only PERMISSIONED_CANNON, with `_initBond`, even though OPCMv2 9.0.2
         // hard-wires SUPER_ROOT_GAMES_MIGRATION on (see the splitter's header).
@@ -241,7 +242,7 @@ contract RSKDeployOPChain is Script {
         disputeGameConfigs[4] = _createGameConfig(false, 0, GameTypes.SUPER_CANNON_KONA, bytes(""));
         disputeGameConfigs[5] = _createGameConfig(false, 0, GameTypes.ZK_DISPUTE_GAME, bytes(""));
 
-        cfg_ = RSKOPCMSplitter.FullConfig({
+        cfg_ = RSKOPCMSplitterBase.FullConfig({
             saltMixer: _input.saltMixer,
             superchainConfig: _input.superchainConfig,
             proxyAdminOwner: _input.opChainProxyAdminOwner,
@@ -301,7 +302,7 @@ contract RSKDeployOPChain is Script {
         require(cfg_.maxResourceLimit > 0, "RSKDeployOPChain: gasLimit too small for any deposit budget");
     }
 
-    function _fromChainContractsToOutput(RSKOPCMSplitter.ChainContracts memory _cts)
+    function _fromChainContractsToOutput(RSKOPCMSplitterBase.ChainContracts memory _cts)
         internal
         view
         returns (Output memory output_)

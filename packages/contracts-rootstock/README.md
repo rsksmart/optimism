@@ -20,7 +20,9 @@ contracts-rootstock/
 ├── DEPLOY.md                           # how to deploy a fresh OP Chain to RSK using only Forge
 ├── foundry.toml                        # remappings into contracts-bedrock
 ├── contracts/
-│   └── RSKOPCMSplitter.sol             # 8-stage splitter (the on-chain helper)
+│   ├── RSKOPCMSplitterBase.sol         # shared OPCMv2 9.0.2 port: validation + _apply slices
+│   ├── RSKOPCMSplitter.sol             # 8-stage splitter (initial deployment)
+│   └── RSKOPCMSplitterUpgrade.sol      # one-transaction upgrade of an existing chain
 └── script/
     └── RSKDeployOPChain.s.sol          # Forge driver: runSplit(input)
 ```
@@ -32,6 +34,18 @@ quirk, downgrade-protection checks) at near-zero bytecode cost. The only
 upstream code we duplicate is the orchestration body of
 `_loadChainContracts` and `_apply`, sliced into 7 stages that each fit
 under 6.8 M gas.
+
+## Upgrading an existing chain
+
+`RSKOPCMSplitterUpgrade` is the RSK counterpart of `OPCMv2.upgrade`, which
+cannot run on these chains (it must be delegatecalled by the ProxyAdmin
+owner, and its sequence check reverts on chains the pre-9.0.2 splitter
+deployed). Deploy one per chain with the OPCMv2 9.0.2 and the chain's
+SystemConfig, have the ProxyAdmin owner(s) transfer ownership to it, then
+call `upgrade` with the same input upstream takes. Every ProxyAdmin goes back
+to its owner in that transaction; `abort` gives them back without upgrading.
+`PLAN.md` lists where it differs from upstream, and
+`test/RSKOPCMSplitterUpgradeFork.t.sol` dry-runs it against a live chain.
 
 ## Quick start
 
