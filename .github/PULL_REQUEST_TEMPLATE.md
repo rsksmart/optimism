@@ -12,26 +12,21 @@
 
 ## Before you open this
 
-Each section is ticked by its owner: the author here, then the reviewer and the merger below. An unticked box blocks the merge.
-
-- [ ] I ran `/simplify` and fixed the findings
-- [ ] I ran `/code-review` and fixed the findings
-- [ ] I ran `/security-review` and fixed the findings
-- [ ] I reviewed the full diff and understand the change, including any AI-generated work
-- [ ] Not a stack, or each PR is safe alone in `rsk/develop` (working or unused), even if the ones above never land
-- [ ] I added `blocking` if the PR holds up the team, or `postponed` if the review can wait
+- [ ] I ran the team review process and fixed the findings
+- [ ] If this is a stack, each PR is safe alone in `rsk/develop` (working or unused), even if the ones above never land
 
 ## For the reviewer
 
-- [ ] I read the full diff and understand the change, including any AI-generated work
-- [ ] Solves the ticket, and only the ticket
-- [ ] Business rules and invariants are right
-- [ ] Fits our architecture, boundaries and domain language
+Copilot, Codex and the team review process already report the nitpicks. Look for what they cannot see:
+
+- [ ] I ran the team review process and went through its findings
 - [ ] The recovery plan holds up, or n/a is right
 - [ ] Peer tested, not only read
-- [ ] Not a stack, or I read every PR in it
+- [ ] If this is a stack, I read every PR in it
+
+Add `blocking` if the PR holds up the team, `postponed` if the review can wait.
 
 ## For the merger
 
 - [ ] The title describes the final merged diff, not the branch's original intent
-- [ ] Not a stack, or I merge only the top one (GitHub merges the rest)
+- [ ] If this is a stack, I merge only the top one (GitHub merges the rest)
