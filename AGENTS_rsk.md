@@ -48,7 +48,7 @@ wherever they conflict.** Read this before acting on anything in those files.
   auto-fill (web UI, `gh pr create` without `--body`) never kicks in — match
   its sections yourself.
 - **Never tick a checklist box in that template**, even one you actually ran
-  (`/simplify`, `/code-review`, `/security-review`, diff reviewed, etc.).
+  (the team review process, peer tested, etc.).
   Those are the human's own attestation, not a record that the step exists.
   Leave every box `[ ]`; they tick them. See [the checklist gate](docs/rsk-pr-checklist.md)
   for pending status, exemptions and activation.
